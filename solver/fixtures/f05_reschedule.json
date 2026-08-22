@@ -1,0 +1,89 @@
+{
+  "component_id": "COMP-104",
+  "usable_stock": 390,
+  "safety_stock": 150,
+  "daily_usage": 90,
+  "suppliers": [
+    {
+      "supplier_id": "SUP-21",
+      "unit_price": 118.0,
+      "lead_time_days": 6,
+      "available_quantity": 1000,
+      "min_order_quantity": 200,
+      "effective_reliability": 0.72,
+      "certified": true,
+      "quality_score": 0.91,
+      "quote_expired": false,
+      "claim_contradicted": false
+    },
+    {
+      "supplier_id": "SUP-42",
+      "unit_price": 132.0,
+      "lead_time_days": 4,
+      "available_quantity": 700,
+      "min_order_quantity": 300,
+      "effective_reliability": 0.81,
+      "certified": true,
+      "quality_score": 0.94,
+      "quote_expired": false,
+      "claim_contradicted": false
+    },
+    {
+      "supplier_id": "SUP-37",
+      "unit_price": 141.0,
+      "lead_time_days": 6,
+      "available_quantity": 400,
+      "min_order_quantity": 100,
+      "effective_reliability": 0.88,
+      "certified": true,
+      "quality_score": 0.96,
+      "quote_expired": false,
+      "claim_contradicted": false
+    },
+    {
+      "supplier_id": "SUP-18",
+      "unit_price": 104.0,
+      "lead_time_days": 3,
+      "available_quantity": 900,
+      "min_order_quantity": 250,
+      "effective_reliability": 0.65,
+      "certified": false,
+      "quality_score": 0.79,
+      "quote_expired": false,
+      "claim_contradicted": false
+    },
+    {
+      "supplier_id": "SUP-55",
+      "unit_price": 126.0,
+      "lead_time_days": 5,
+      "available_quantity": 350,
+      "min_order_quantity": 350,
+      "effective_reliability": 0.55,
+      "certified": true,
+      "quality_score": 0.92,
+      "quote_expired": false,
+      "claim_contradicted": false
+    }
+  ],
+  "production_orders": [
+    {
+      "production_order_id": "PROD-914",
+      "units_required": 700,
+      "deadline_day": 2,
+      "priority_weight": 1.0,
+      "max_delay_days": 5
+    },
+    {
+      "production_order_id": "PROD-882",
+      "units_required": 700,
+      "deadline_day": 4,
+      "priority_weight": 5.0,
+      "max_delay_days": 0
+    }
+  ],
+  "min_quality": 0.9,
+  "budget_cap": 400000.0,
+  "approval_limit": 150000.0,
+  "allow_reschedule": true,
+  "allow_partial": false
+}

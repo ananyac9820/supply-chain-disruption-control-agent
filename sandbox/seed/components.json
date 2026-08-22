@@ -1,0 +1,14 @@
+[
+  {
+    "component_id": "COMP-104",
+    "name": "Motor Driver IC",
+    "current_stock": 420,
+    "usable_stock": 390,
+    "daily_usage": 90,
+    "safety_stock": 150,
+    "warehouse": "Pune-Plant-1",
+    "last_updated": "2026-09-02T04:00:00",
+    "required_certifications": ["ISO-9001", "Automotive-Grade"],
+    "min_quality": 0.9
+  }
+]

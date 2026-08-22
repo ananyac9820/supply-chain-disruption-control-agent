@@ -10,8 +10,22 @@ This system is fully simulated, per problem statement §18.
 - Costs are numbers in a solver and a database. No payment library.
 - No external data feed is used. Not even input-side.
 
-The only outbound network call in this entire codebase is to the LLM
-provider. Verify with:
+The trust ledger is four integer counters in the same SQLite file. No
+external service scores a supplier.
+
+Network activity in this codebase, exhaustively:
+
+1. The LLM provider, from Track B's agent. The only call that leaves the
+   machine.
+2. `sandbox/client.py` to `http://localhost:<port>` — the agent talking to
+   the simulated sandbox. It uses `urllib.request` from the standard library,
+   and `_check_loopback` refuses any base URL whose host is not localhost.
+3. The sandbox itself listens on localhost. The demo harnesses in `demo/`
+   start it in-process and bind an ephemeral port on 127.0.0.1 to do so.
+
+There is no client in this repo capable of reaching a supplier, an ERP, a
+mail host or a payment processor — not by configuration, and not by editing a
+base URL. Verify with:
 
     grep -rE "smtplib|imaplib|requests\.|httpx\.|stripe|boto3" sandbox/ solver/ guardrails/
 

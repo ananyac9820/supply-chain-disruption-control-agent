@@ -39,8 +39,20 @@ class SandboxClient(Protocol):
     def erp_update(self, action: str, payload: dict) -> dict: ...
 
 
-# The stub's simulated clock. Fixed so canned records are deterministic.
+# The stub's simulated clock starts here. Seeded records are stamped relative
+# to this epoch, so deadlines land on the same day numbers on every run.
 NOW = datetime(2026, 9, 2, 10, 0, 0)
+
+# One tick, matching sandbox.db.SIM_TICK. Sending a supplier a message or
+# issuing an RFQ advances the clock.
+#
+# The clock has to move. Quotes are stamped from it and expire against it
+# (G8), so a stub whose clock stands still stamps every re-quote with the same
+# frozen instant: once the agent's own clock has moved past the validity
+# window, a freshly requested quote is born already expired, G8 fires again,
+# and the re-RFQ recovery path can never close. It terminates safely at the
+# replan cap, which is why it reads as a loop rather than a crash.
+TICK = timedelta(hours=1)
 
 ERP_ACTIONS = {                                   # PS §5.9 — the only six
     "mark_po_delayed", "create_alternate_po", "attach_supplier_note",
@@ -73,6 +85,7 @@ class StubSandbox:
     """Canned COMP-104 world. No network, no database, no file I/O."""
 
     def __init__(self) -> None:
+        self._now = NOW
         self._messages: list[Message] = [
             # SUP-21's scripted first reply on PO-7712, verbatim from PS §5.5.
             Message(
@@ -89,6 +102,16 @@ class StubSandbox:
         self._erp_log: list[dict] = []
         self._reply_count: dict[str, int] = {}
         self._seq = 1
+
+    # ---- the simulated clock -----------------------------------------
+
+    def sim_clock(self) -> dict:
+        """Same shape as GET /sim/clock, so callers need no special case."""
+        return {"now": self._now.isoformat()}
+
+    def _tick(self) -> datetime:
+        self._now += TICK
+        return self._now
 
     # ---- reads -------------------------------------------------------
 
@@ -162,9 +185,10 @@ class StubSandbox:
         ]
 
     def get_inbox(self, since: datetime | None = None) -> list[Message]:
+        visible = [m for m in self._messages if m.ts <= self._now]
         if since is None:
-            return list(self._messages)
-        return [m for m in self._messages if m.ts > since]
+            return visible
+        return [m for m in visible if m.ts > since]
 
     def get_tracking(self, po_id: str) -> TrackingRecord:
         # Ground truth, and it disagrees with SUP-21's claim (A-3 / H-08).
@@ -188,15 +212,20 @@ class StubSandbox:
             message_id=self._next_id("MSG"),
             sender="ops@example.com",
             recipient=f"{supplier_id.lower().replace('-', '')}@example.com",
-            subject=subject, body=body, related_po_id="PO-7712", ts=NOW,
+            subject=subject, body=body, related_po_id="PO-7712", ts=self._now,
         )
         self._messages.append(sent)
+        # The reply lands on the next tick, never inside the call that asked
+        # for it — the same rule the live sandbox enforces with visible_at.
+        self._tick()
         self._messages.append(self._reply(supplier_id, body))
         return sent
 
     def request_rfq(self, component_id: str, quantity: int, needed_by_days: int,
                     supplier_ids: list[str]) -> list[Quote]:
         catalog = {s.supplier_id: s for s in self.get_suppliers(component_id)}
+        # Quotes are issued now, not at some frozen instant in the past.
+        issued_at = self._tick()
         return [
             Quote(
                 supplier_id=sid, component_id=component_id,
@@ -206,7 +235,7 @@ class StubSandbox:
                 expedite_available=catalog[sid].lead_time_days > 3,
                 expedite_fee=8000.0,
                 quote_valid_hours=6,
-                issued_at=NOW,
+                issued_at=issued_at,
             )
             for sid in supplier_ids if sid in catalog
         ]
@@ -228,7 +257,7 @@ class StubSandbox:
                     "record_id": None}
         record_id = self._next_id("ERP")
         self._erp_log.append({"record_id": record_id, "action": action,
-                              "payload": payload, "ts": NOW})
+                              "payload": payload, "ts": self._now})
         return {"status": "ok", "message": f"{action} recorded",
                 "record_id": record_id}
 
@@ -260,5 +289,5 @@ class StubSandbox:
             sender=f"{supplier_id.lower().replace('-', '')}@example.com",
             recipient="ops@example.com",
             subject=f"Re: PO-7712 / {supplier_id}",
-            body=body, related_po_id="PO-7712", ts=NOW,
+            body=body, related_po_id="PO-7712", ts=self._now,
         )

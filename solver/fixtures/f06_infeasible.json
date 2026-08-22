@@ -1,0 +1,34 @@
+{
+  "component_id": "COMP-406",
+  "usable_stock": 300,
+  "safety_stock": 100,
+  "daily_usage": 80,
+  "suppliers": [
+    {
+      "supplier_id": "SUP-A",
+      "unit_price": 100.0,
+      "lead_time_days": 2,
+      "available_quantity": 200,
+      "min_order_quantity": 100,
+      "effective_reliability": 0.9,
+      "certified": true,
+      "quality_score": 0.95,
+      "quote_expired": false,
+      "claim_contradicted": false
+    }
+  ],
+  "production_orders": [
+    {
+      "production_order_id": "PO-1",
+      "units_required": 700,
+      "deadline_day": 5,
+      "priority_weight": 5.0,
+      "max_delay_days": 0
+    }
+  ],
+  "min_quality": 0.9,
+  "budget_cap": 400000.0,
+  "approval_limit": 150000.0,
+  "allow_reschedule": true,
+  "allow_partial": false
+}

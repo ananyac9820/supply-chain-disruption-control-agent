@@ -1,0 +1,27 @@
+{
+  "status": "OPTIMAL",
+  "allocations": [
+    {
+      "supplier_id": "SUP-21",
+      "units": 700,
+      "cost": 82600.0,
+      "arrival_day": 6
+    },
+    {
+      "supplier_id": "SUP-42",
+      "units": 460,
+      "cost": 60720.0,
+      "arrival_day": 4
+    }
+  ],
+  "reschedules": [
+    {
+      "production_order_id": "PROD-914",
+      "delay_days": 4
+    }
+  ],
+  "total_cost": 143320.0,
+  "requires_approval": false,
+  "binding_constraint": null,
+  "relaxation_used": "reschedule"
+}

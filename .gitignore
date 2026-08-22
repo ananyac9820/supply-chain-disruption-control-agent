@@ -12,3 +12,6 @@ venv/
 audit_logs/
 demo/recordings/
 .DS_Store
+*.egg-info/
+build/
+dist/
