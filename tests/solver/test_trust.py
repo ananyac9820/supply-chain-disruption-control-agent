@@ -62,9 +62,9 @@ def test_reliability_never_falls_through_the_floor():
     assert effective_reliability("SUP-21", 0.90) == RELIABILITY_FLOOR
 
 
-def test_on_time_deliveries_do_not_buy_back_a_lie():
+def test_on_time_deliveries_do_not_offset_an_attributed_failure():
     """§4.5's formula has no credit term. Ten clean deliveries do not undo one
-    contradicted claim — that is a deliberate asymmetry, not an omission."""
+    attributed failure — a deliberate asymmetry, not an omission."""
     trust_write("SUP-21", "contradicted_claim")
     penalised = effective_reliability("SUP-21", 0.90)
     for _ in range(10):
@@ -113,11 +113,11 @@ def _input_from_ledger() -> SolverInput:
 
 @pytest.mark.parametrize("solve", [model.solve, fallback.solve],
                          ids=["cp-sat", "greedy"])
-def test_a_lie_at_minute_3_changes_the_allocation_at_minute_9(solve):
+def test_an_attributed_incident_changes_the_next_allocation(solve):
     """The whole point of §4.5, driven through the real ledger.
 
     Same catalog, same gap, same everything — except that between the two
-    solves the agent catches SUP-X in a contradicted claim.
+    solves an incident attributed to SUP-X reaches its reputation.
     """
     before = solve(_input_from_ledger())
     assert {a.supplier_id for a in before.allocations} == {"SUP-X"}
@@ -127,7 +127,7 @@ def test_a_lie_at_minute_3_changes_the_allocation_at_minute_9(solve):
     after = solve(_input_from_ledger())
     assert {a.supplier_id for a in after.allocations} == {"SUP-Y"}
     assert after.total_cost > before.total_cost, (
-        "the agent knowingly pays more to avoid a supplier that lied")
+        "the agent knowingly pays more to route around an attributed failure")
 
 
 def test_both_solvers_read_the_risk_weight_from_the_frozen_constant():

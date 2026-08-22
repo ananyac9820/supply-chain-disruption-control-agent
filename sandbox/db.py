@@ -8,9 +8,12 @@ Tables marked ADD are our additions beyond PS §5; every one of them is
 justified in master plan §8.3 and stays sandbox-internal.
 """
 
+import gc
 import json
 import os
 import sqlite3
+from contextlib import contextmanager
+from typing import Iterator
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -102,7 +105,29 @@ CREATE TABLE IF NOT EXISTS tracking (              -- PS §5.10, ground truth
     po_id           TEXT PRIMARY KEY REFERENCES purchase_orders(po_id),
     supplier_claim  TEXT NOT NULL,
     tracking_status TEXT NOT NULL,
-    last_movement   TEXT
+    last_movement   TEXT,
+    -- ADD: evidence, sandbox-internal. Not on the TrackingRecord response —
+    -- contracts/models.py is frozen and this adds no field to it. These are
+    -- what let attribution distinguish "the supplier never tendered it" from
+    -- "the courier never collected it". Without them every discrepancy is
+    -- ambiguous and nothing can ever be attributed.
+    packed_at       TEXT,      -- supplier's own pack record
+    tendered_at     TEXT       -- handover to the courier, scanned
+);
+
+CREATE TABLE IF NOT EXISTS incidents (             -- ADD: observation log
+    -- Every discrepancy lands here, always, whether or not anyone is at
+    -- fault. Attribution is a separate judgement recorded alongside the
+    -- observation, not a precondition for recording it.
+    incident_id       TEXT PRIMARY KEY,
+    po_id             TEXT NOT NULL,
+    supplier_id       TEXT NOT NULL,
+    observed          TEXT NOT NULL,   -- what the evidence shows
+    expected          TEXT NOT NULL,   -- what the claim implied
+    attribution       TEXT NOT NULL
+        CHECK (attribution IN ('SUPPLIER','COURIER','FACTORY','EXTERNAL','UNATTRIBUTED')),
+    attribution_basis TEXT NOT NULL,   -- why, in one readable line
+    ts                TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS quotes (                -- PS §5.7, issued by /rfq
@@ -154,14 +179,34 @@ CREATE TABLE IF NOT EXISTS chaos_log (             -- ADD §4.8 POST /sim/inject
 
 TABLES = ("components", "suppliers", "purchase_orders", "production_orders",
           "messages", "tracking", "quotes", "erp_log", "supplier_trust",
-          "sim_clock", "sim_flags", "chaos_log")
+          "incidents", "sim_clock", "sim_flags", "chaos_log")
 
 
 def connect() -> sqlite3.Connection:
+    """A raw connection. Prefer session(); the caller here must close it."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+@contextmanager
+def session() -> Iterator[sqlite3.Connection]:
+    """A connection that commits on success, rolls back on error, and closes.
+
+    `with sqlite3.connect(...) as conn:` is a *transaction* manager, not a
+    resource manager: it commits or rolls back and leaves the handle open
+    until the garbage collector happens to reach it. POSIX tolerates
+    unlinking a file with open handles, so that leak was invisible on macOS
+    and Linux. Windows refuses (WinError 32), which took out every test
+    behind the autouse reset fixture.
+    """
+    conn = connect()
+    try:
+        with conn:                 # keeps the commit/rollback semantics
+            yield conn
+    finally:
+        conn.close()
 
 
 def init_db(reset: bool = False) -> None:
@@ -171,8 +216,11 @@ def init_db(reset: bool = False) -> None:
     put the world back after a chaos run.
     """
     if reset and DB_PATH.exists():
+        # Anything this process still holds open must go before the unlink,
+        # or Windows raises WinError 32 and the reset fails.
+        gc.collect()
         DB_PATH.unlink()
-    with connect() as conn:
+    with session() as conn:
         conn.executescript(SCHEMA)
         empty = conn.execute("SELECT COUNT(*) FROM components").fetchone()[0] == 0
     if empty:
@@ -186,7 +234,7 @@ def _rows(name: str) -> list[dict]:
 
 def seed() -> None:
     """Load the hand-authored catalog. Never sampled, never generated (§4.7)."""
-    with connect() as conn:
+    with session() as conn:
         for table in ("components", "suppliers", "purchase_orders",
                       "production_orders", "messages", "tracking"):
             rows = _rows(table)
@@ -213,7 +261,7 @@ def _encode(value):
 
 
 def sim_now() -> datetime:
-    with connect() as conn:
+    with session() as conn:
         row = conn.execute("SELECT now FROM sim_clock WHERE id = 1").fetchone()
     return datetime.fromisoformat(row["now"]) if row else SIM_EPOCH
 
@@ -225,6 +273,6 @@ def advance_clock(delta) -> datetime:
     "the reply arrives on the next tick" mean something without a scheduler.
     """
     now = sim_now() + delta
-    with connect() as conn:
+    with session() as conn:
         conn.execute("UPDATE sim_clock SET now = ? WHERE id = 1", (now.isoformat(),))
     return now

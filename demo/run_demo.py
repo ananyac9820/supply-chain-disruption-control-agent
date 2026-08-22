@@ -37,8 +37,9 @@ from contracts.constants import APPROVAL_THRESHOLD, EMERGENCY_BUDGET
 from guardrails.validator import validate
 from sandbox.client import HttpSandbox
 from solver import solve
-from solver.build import baseline, build_solver_input
-from trust import effective_reliability, trust_read, trust_write
+from solver.build import (baseline, build_solver_input,
+                          unconfirmed_shipment_suppliers)
+from trust import effective_reliability, incidents_for, shipment_confidence
 
 RULE = "─" * 78
 FAILURES: list[str] = []
@@ -157,25 +158,31 @@ def act_two(world: HttpSandbox, act_one_plan) -> None:
     tracking = world.get_tracking("PO-7712")
     line(f"supplier_claim {tracking.supplier_claim!r} · tracking_status "
          f"{tracking.tracking_status!r} · last_movement {tracking.last_movement}")
-    contradicted = (tracking.supplier_claim == "dispatched"
-                    and tracking.tracking_status == "label_created_no_pickup")
-    check("the claim is CONTRADICTED by tracking", contradicted)
+    unsupported = (tracking.supplier_claim == "dispatched"
+                   and tracking.tracking_status == "label_created_no_pickup")
+    check("the claim is not supported by tracking evidence", unsupported)
 
-    step("Decrement SUP-21's trust, and re-solve with what we now know")
+    step("Record the incident, attribute it, and re-solve with what we know")
     catalog = {s.supplier_id: s for s in world.get_suppliers("COMP-104")}
     before_score = effective_reliability("SUP-21", catalog["SUP-21"].reliability_score)
-    trust_write("SUP-21", "contradicted_claim")
+    for inc in incidents_for("PO-7712"):
+        line(f"{inc['incident_id']}  attribution {inc['attribution']} — "
+             f"{inc['attribution_basis']}")
     after_score = effective_reliability("SUP-21", catalog["SUP-21"].reliability_score)
-    line(f"SUP-21 effective reliability {before_score:.2f} -> {after_score:.2f} "
-         f"({trust_read('SUP-21').contradicted_claims} contradicted claim)")
-    check("the trust score actually moved", after_score < before_score)
+    line(f"shipment_confidence(PO-7712) {shipment_confidence('PO-7712'):.2f} "
+         f"· reputation {before_score:.2f} -> {after_score:.2f}")
+    check("an incident was recorded", bool(incidents_for("PO-7712")))
+    check("the shipment is unverifiable", shipment_confidence("PO-7712") < 1.0)
+    check("reputation did not move on ambiguous evidence",
+          after_score == before_score)
 
-    plan = solve(build_solver_input(world, "COMP-104", budget_cap=EMERGENCY_BUDGET,
-                                    contradicted={"SUP-21"}))
+    plan = solve(build_solver_input(
+        world, "COMP-104", budget_cap=EMERGENCY_BUDGET,
+        contradicted=unconfirmed_shipment_suppliers(world)))
     show_plan(plan)
-    check("SUP-21 no longer carries any of the plan",
+    check("SUP-21's unconfirmed units carry none of the plan",
           "SUP-21" not in {a.supplier_id for a in plan.allocations})
-    check("the plan changed because of what was learned",
+    check("the plan changed because of what was verified",
           {a.supplier_id for a in plan.allocations}
           != {a.supplier_id for a in act_one_plan.allocations},
           "same catalog, same gap, different answer")
@@ -194,7 +201,8 @@ def act_three(world: HttpSandbox) -> None:
     step("Solve procurement-only — production reschedule forbidden")
     procurement_only = solve(build_solver_input(
         world, "COMP-104", budget_cap=EMERGENCY_BUDGET,
-        contradicted={"SUP-21"}, allow_reschedule=False))
+        contradicted=unconfirmed_shipment_suppliers(world),
+        allow_reschedule=False))
     show_plan(procurement_only)
     check("no sourcing-only plan exists",
           procurement_only.status == "INFEASIBLE")
@@ -205,7 +213,8 @@ def act_three(world: HttpSandbox) -> None:
     step("Solve again with production rescheduling allowed")
     plan = solve(build_solver_input(
         world, "COMP-104", budget_cap=EMERGENCY_BUDGET,
-        contradicted={"SUP-21"}, allow_reschedule=True))
+        contradicted=unconfirmed_shipment_suppliers(world),
+        allow_reschedule=True))
     show_plan(plan)
     check("rescheduling makes it feasible", plan.status != "INFEASIBLE")
     check("and the relaxation is reported honestly",

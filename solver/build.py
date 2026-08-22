@@ -8,8 +8,14 @@ wrong here and expensive to find at hour 14:
     removed from the candidate set, not passed through with a note. The
     solver double-checks both as C3 and C4, but the filtering belongs here.
   * effective_reliability, not reliability_score, feeds the risk term. Pass
-    the catalog score and the trust ledger stops changing any decision —
-    which is the failure mode §4.5 warns about, and it is silent.
+    the catalog score and reputation stops changing any decision — which is
+    the failure mode §4.5 warns about, and it is silent.
+
+The `contradicted` argument keeps its contract name because
+SolverSupplier.claim_contradicted is frozen, but read it as *unconfirmed*:
+the supplier is out of this plan because its units cannot be verified, which
+is not the same as a finding against the supplier. unconfirmed_shipment_suppliers()
+derives the set from shipment confidence.
 
 Take it or replace it; if you replace it, keep both of those.
 """
@@ -18,7 +24,7 @@ from datetime import date, datetime
 
 from contracts.constants import MAX_DELAY_DAYS, PRIORITY_WEIGHT
 from contracts.models import SolverInput, SolverProdOrder, SolverSupplier
-from trust import effective_reliability
+from trust import effective_reliability, units_confirmed
 
 
 def build_solver_input(
@@ -128,3 +134,14 @@ def _as_date(value) -> date:
     if isinstance(value, date):
         return value
     return datetime.fromisoformat(value).date()
+
+
+def unconfirmed_shipment_suppliers(client) -> set[str]:
+    """Suppliers whose in-transit units cannot be counted, by PO confidence.
+
+    Reads the fast axis only. A supplier lands here because one of its
+    shipments is unverifiable — including when the evidence points at the
+    courier, or at nobody — and not because its reputation has moved.
+    """
+    return {po.supplier_id for po in client.get_purchase_orders()
+            if not units_confirmed(po.po_id)}

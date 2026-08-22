@@ -13,16 +13,16 @@ a hidden test that will silently pass for the wrong reason.
 
 | event | intent | observable change | plan after event | plan moved | guardrails |
 |---|---|---|---|---|---|
-| H-01 | supplier delays after confirming | purchase_orders, inbox | OPTIMAL · reschedule · 152,010 | no | G2 |
-| H-02 | ERP overstates stock | inventory | OPTIMAL · reschedule · 152,010 | no | G2 |
-| H-03 | cheapest supplier fails quality | suppliers | OPTIMAL · reschedule · 152,010 | no | G2 |
+| H-01 | supplier delays after confirming | purchase_orders, inbox, quotes | OPTIMAL · reschedule · 152,010 | no | G2 |
+| H-02 | ERP overstates stock | inventory, quotes | OPTIMAL · reschedule · 152,010 | no | G2 |
+| H-03 | cheapest supplier fails quality | suppliers, quotes | OPTIMAL · reschedule · 152,010 | no | G2 |
 | H-04 | reliable supplier has insufficient quantity | suppliers, quotes | OPTIMAL · reschedule · 152,010 | no | G2 |
 | H-05 | low-reliability supplier is fastest | suppliers, quotes | OPTIMAL · reschedule · 152,010 | no | G2 |
-| H-06 | demand spike mid-run | inventory | OPTIMAL · reschedule · 152,010 | no | G2 |
+| H-06 | demand spike mid-run | inventory, quotes | OPTIMAL · reschedule · 152,010 | no | G2 |
 | H-07 | expedite becomes unavailable | quotes | OPTIMAL · reschedule · 152,010 | no | G2 |
-| H-08 | supplier claims dispatch, tracking contradicts | inbox | OPTIMAL · reschedule · 152,010 | no | G2 |
+| H-08 | supplier claims dispatch, tracking does not support it | inbox, quotes | OPTIMAL · reschedule · 152,010 | no | G2 |
 | H-09 | purchase exceeds approval limit | suppliers, quotes | OPTIMAL · reschedule · 212,814 | yes | G2 |
-| H-10 | production priority changes mid-simulation | production | INFEASIBLE (deadline) | yes | G12 |
+| H-10 | production priority changes mid-simulation | production, quotes | INFEASIBLE (deadline) | yes | G12 |
 
 ## Cascades
 
@@ -33,7 +33,7 @@ because each event is written and tested against a pristine world.
 |---|---|---|---|---|
 | H-02 → H-06 | stock corrected down, then demand spikes | INFEASIBLE (deadline) | OPTIMAL · reschedule · 152,010 | G2 |
 | H-07 → H-09 | expedite withdrawn, then costs rise | INFEASIBLE (deadline) | OPTIMAL · reschedule · 212,814 | G2 |
-| H-08 → H-04 | a supplier caught lying while the reliable alternative is short | INFEASIBLE (deadline) | OPTIMAL · reschedule · 152,010 | G2 |
+| H-08 → H-04 | an unverifiable shipment while the reliable alternative is short | INFEASIBLE (deadline) | OPTIMAL · reschedule · 152,010 | G2 |
 
 ## Findings
 
@@ -45,20 +45,22 @@ run their own version of these.
 The baseline plan in a freshly reseeded world is already
 `OPTIMAL · reschedule · 152,010`, with G2 firing. That is the first finding.
 
-### 1. The seed already contains the contradiction, so H-08 injects a message and nothing else
+### 1. The seed already carries the unsupported claim, so H-08 injects a message and nothing else
 
 `tracking/PO-7712` ships as `supplier_claim: dispatched` against
 `tracking_status: label_created_no_pickup`. Any agent that checks tracking
-finds SUP-21 contradicted on its first read, before H-08 fires. H-08's only
-observable effect is the inbox message.
+finds PO-7712's units unconfirmable on its first read, before H-08 fires.
+H-08's only observable effect is the inbox message. Note that this records an
+UNATTRIBUTED incident: the shipment cannot be counted, and no one's
+reputation moves.
 
 This is not straightforwardly fixable: `contracts/stub_sandbox.py` is frozen
 and returns that contradiction unconditionally, and `tests/contract/` asserts
 stub and live sandbox agree. Changing the seed to start clean would break the
 parity that is the merge insurance.
 
-The consequence for the demo: Act 2 is the agent *discovering* a pre-existing
-lie, not the world telling a new one. `demo/run_acts.py` handles this by
+The consequence for the demo: Act 2 is the agent *discovering* a
+pre-existing discrepancy, not the world creating a new one. `demo/run_acts.py` handles this by
 solving twice — once trusting SUP-21, once not — which is a counterfactual,
 not a timeline. Worth saying out loud that way rather than implying the claim
 arrived mid-run.
@@ -95,8 +97,8 @@ different pre-existing exclusion.
 The three combinations behave additively; none produced a state the single
 events did not. H-07 → H-09 is indistinguishable from H-09 alone, for the
 reason in finding 2. H-08 → H-04 is indistinguishable from the baseline: the
-lie is already in the seed, and cutting SUP-37 to 200 units does not bind
-because the plan only draws 110 from it.
+discrepancy is already in the seed, and cutting SUP-37 to 200 units does not
+bind because the plan only draws 110 from it.
 
 H-02 → H-06 is the one worth keeping. Neither event moves the plan, but both
 move the *baseline counterfactual* — coverage drops from 4.33 days to 3.0, and
