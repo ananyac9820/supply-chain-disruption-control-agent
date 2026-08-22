@@ -1,9 +1,0 @@
-pydantic>=2.7
-fastapi>=0.111
-uvicorn[standard]>=0.30
-ortools>=9.10
-pytest>=8.2
-langgraph>=0.2
-langchain-core>=0.3
-anthropic>=0.40
-rich>=13.0
