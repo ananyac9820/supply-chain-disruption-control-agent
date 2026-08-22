@@ -55,11 +55,12 @@ dicts including `effective_reliability`.
 ### `GET /tracking/{po_id}`
 `TrackingRecord` — ground truth against supplier claims. 404 if no record.
 
-**Side effect, by design:** when `supplier_claim == "dispatched"` and
-`tracking_status` is one of `label_created_no_pickup`, `not_found`,
-`no_movement`, a `contradicted_claim` is written to the trust ledger for that
-PO's supplier. Written **at most once per PO** — polling it does not compound
-the penalty, so a read cache changes cost, not answers.
+**Side effect, by design:** a discrepancy between the claim and the evidence
+records an **incident**, always — whether or not anyone is at fault — and
+drops that PO's shipment confidence. Idempotent per (po_id, observed), so
+polling compounds nothing and a read cache changes cost, not answers.
+
+Reputation moves **only** when attribution comes back `SUPPLIER`.
 
 ### `GET /inbox?since=<iso8601>`
 `list[Message]`, oldest first. `since` filters on `ts` strictly greater than.
@@ -94,7 +95,7 @@ Advances the simulated clock by one hour and queues the persona's reply.
 |---|---|---|
 | `honest` | SUP-37, SUP-42 | a specific date and quantity, first reply |
 | `vague` | SUP-55 | no date, no quantity — until challenged |
-| `contradictory` | SUP-21 | claims dispatch against its own tracking; revises down when challenged |
+| `contradictory` | SUP-21 | claims dispatch that its own tracking does not support; revises down when challenged |
 
 A challenge counts when the body contains a question mark **and** the word
 `date` or `quantity` on a word boundary. `"Any update?"` does not count —
@@ -201,6 +202,53 @@ inject results.
 
 ---
 
+## Incidents and attribution
+
+An incident is an observation about a shipment. Attribution is a separate
+judgement recorded alongside it, never a precondition for recording it.
+
+| attribution | established by |
+|---|---|
+| `SUPPLIER` | nothing was ever tendered **and** the supplier's own record shows no pack event |
+| `COURIER` | handover scanned, then no movement for 48h |
+| `UNATTRIBUTED` | the evidence does not establish a cause |
+| `FACTORY`, `EXTERNAL` | in the vocabulary for incidents arriving from outside tracking; no tracking record returns them |
+
+**A label with no pickup scan is `UNATTRIBUTED`.** It fits a supplier that
+never handed the goods over and equally a courier that never came. Nothing in
+tracking separates them, so no reputation moves — the shipment is still
+unverifiable, which is a different statement about a different thing.
+
+`trust.incidents_for(po_id=..., supplier_id=...)` returns the log for the
+audit trail and the brief. Each row carries `observed`, `expected`,
+`attribution` and `attribution_basis` — the basis being one readable line
+giving the reason.
+
+## The two trust axes
+
+```python
+from trust import reputation, shipment_confidence, units_confirmed
+from trust import effective_reliability          # signature unchanged
+```
+
+| | `reputation(supplier_id)` | `shipment_confidence(po_id)` |
+|---|---|---|
+| about | a counterparty | one consignment |
+| moves on | `SUPPLIER`-attributed incidents only | any verified discrepancy |
+| speed | slow, historical, sticky | fast, per-PO |
+| feeds | `effective_reliability` → the solver risk term | whether in-transit units count as confirmed |
+
+`effective_reliability(supplier_id, catalog_score)` is unchanged in signature
+and in meaning: catalog score minus attributed history, floored at 0.05.
+
+`units_confirmed(po_id)` is the boolean form — false below 0.5.
+`solver.build.unconfirmed_shipment_suppliers(client)` gives the set of
+suppliers whose units cannot be counted, which is what to pass as
+`build_solver_input(contradicted=...)`. That argument keeps its name because
+`SolverSupplier.claim_contradicted` is frozen; read it as *unconfirmed*.
+
+---
+
 ## `validate(plan, context) -> Verdict`
 
 `from guardrails.validator import validate`
@@ -224,7 +272,9 @@ gets you no G5, not a crash.
 | `affected_priorities` | `list[str]` | G5 |
 | `safety_stock_breach_justification` | `str \| None` | G5 |
 | `quotes` | `list[dict]` — `supplier_id`, `issued_at`, `quote_valid_hours` | G8 |
-| `claims` | `list[dict]` — `supplier_id`, `status` | G9 |
+| `shipment_confidence` | `dict[str, float]` — supplier_id to 0..1 | G9 |
+| `unconfirmed_below` | float, default 0.5 | G9 |
+| `claims` | `list[dict]` — legacy; CONTRADICTED reads as confidence 0.0 | G9 |
 | `now` | `datetime \| str` | G8 |
 
 ### Branch on `vetoed()`, not on `passed`
@@ -244,6 +294,11 @@ over-threshold plan re-solves to itself, and G12 only fires after the ladder
 has already run out. Treating either as a veto burns a correction round for
 nothing. `G1`, `G8`, `G9` and an unjustified `G5` are real vetoes.
 
+G9 keys on **shipment confidence**, not reputation. Its reason reads "claim
+inconsistent with tracking evidence; units unconfirmed": the units are
+excluded because they cannot be verified, which is not a finding against the
+supplier.
+
 **`vetoed()` says whether to recover, not how.** The recoveries differ, and
 G8 is the one that is not a re-solve:
 
@@ -251,7 +306,7 @@ G8 is the one that is not a re-solve:
 |---|---|
 | G1 | re-solve under a tighter cap |
 | G5 | re-solve preserving safety stock, or record a justification |
-| G9 | re-solve without that supplier — its units count as 0 confirmed |
+| G9 | re-solve without those units — they cannot be confirmed |
 | G8 | **fetch a fresh quote first**, then re-solve |
 
 ```python

@@ -278,7 +278,7 @@ def _inject(event: str, params: dict) -> dict:
             status_code=400,
             detail=f"unknown event: {event}. Known: {', '.join(sorted(EVENTS))}")
     now = db.sim_now()
-    with db.connect() as conn:
+    with db.session() as conn:
         detail = handler(conn, params)
         n = conn.execute("SELECT COUNT(*) FROM chaos_log").fetchone()[0]
         disruption_id = f"DIS-{n + 1:03d}"

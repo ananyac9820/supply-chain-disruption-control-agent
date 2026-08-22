@@ -24,8 +24,9 @@ from contracts.models import (
     ApprovalResult, Component, Message, ProductionOrder, PurchaseOrder, Quote,
     Supplier, TrackingRecord,
 )
-from sandbox import chaos, db
-from trust import TrustEvent, effective_reliability, trust_write
+from sandbox import attribution, chaos, db
+from trust import (TrustEvent, effective_reliability, record_incident,
+                   trust_write)
 
 
 @asynccontextmanager
@@ -63,7 +64,7 @@ def _component(row) -> Component:
 @app.get("/inventory", response_model=list[Component])
 def get_inventory() -> list[Component]:
     """T-01. Every component. usable_stock is the field that matters."""
-    with db.connect() as conn:
+    with db.session() as conn:
         rows = conn.execute(
             "SELECT * FROM components ORDER BY component_id").fetchall()
     return [_component(r) for r in rows]
@@ -72,7 +73,7 @@ def get_inventory() -> list[Component]:
 @app.get("/inventory/{component_id}", response_model=Component)
 def get_component(component_id: str) -> Component:
     """T-01 by id. 404 rather than an empty list, so a typo is loud."""
-    with db.connect() as conn:
+    with db.session() as conn:
         row = conn.execute(
             "SELECT * FROM components WHERE component_id = ?",
             (component_id,)).fetchone()
@@ -162,14 +163,14 @@ class ErpRequest(BaseModel):
 
 @app.get("/purchase-orders", response_model=list[PurchaseOrder])
 def get_purchase_orders() -> list[PurchaseOrder]:
-    with db.connect() as conn:
+    with db.session() as conn:
         rows = conn.execute("SELECT * FROM purchase_orders ORDER BY po_id").fetchall()
     return [_purchase_order(r) for r in rows]
 
 
 @app.get("/purchase-orders/{po_id}", response_model=PurchaseOrder)
 def get_purchase_order(po_id: str) -> PurchaseOrder:
-    with db.connect() as conn:
+    with db.session() as conn:
         row = conn.execute("SELECT * FROM purchase_orders WHERE po_id = ?",
                            (po_id,)).fetchone()
     if row is None:
@@ -187,7 +188,7 @@ def get_suppliers(component_id: str = Query(..., description="required")) -> lis
     Each row carries effective_reliability alongside the catalog's
     reliability_score. Nothing existing is renamed or removed.
     """
-    with db.connect() as conn:
+    with db.session() as conn:
         rows = conn.execute(
             "SELECT * FROM suppliers WHERE component_id = ? ORDER BY supplier_id",
             (component_id,)).fetchall()
@@ -203,7 +204,7 @@ def get_suppliers(component_id: str = Query(..., description="required")) -> lis
 
 @app.get("/production-schedule", response_model=list[ProductionOrder])
 def get_production_schedule() -> list[ProductionOrder]:
-    with db.connect() as conn:
+    with db.session() as conn:
         rows = conn.execute(
             "SELECT * FROM production_orders ORDER BY deadline, production_order_id"
         ).fetchall()
@@ -214,7 +215,7 @@ def get_production_schedule() -> list[ProductionOrder]:
 
 @app.get("/tracking/{po_id}", response_model=TrackingRecord)
 def get_tracking(po_id: str) -> TrackingRecord:
-    with db.connect() as conn:
+    with db.session() as conn:
         row = conn.execute("SELECT * FROM tracking WHERE po_id = ?",
                            (po_id,)).fetchone()
     if row is None:
@@ -225,35 +226,35 @@ def get_tracking(po_id: str) -> TrackingRecord:
                           last_movement=row["last_movement"])
 
 
-CONTRADICTING_STATUSES = ("label_created_no_pickup", "not_found", "no_movement")
-
-
 def _record_contradiction(po_id: str, row) -> None:
-    """A dispatch claim against tracking that shows nothing moved is a
-    contradiction, and the ledger should know without being asked twice.
+    """Log a discrepancy between the claim and the evidence, and attribute it.
 
-    Written at most once per (po_id, claim). A read endpoint that compounds a
-    penalty every time it is polled would make the trust score a function of
-    how often the agent looked, and D-3's read cache would then change the
-    answer rather than just save a call.
+    Two separate things happen here, and keeping them separate is the point:
+
+      * An incident is recorded, always. A discrepancy is a fact about a
+        shipment and gets logged whether or not anyone turns out to be at
+        fault. It drops that PO's shipment confidence.
+      * Reputation moves only when attribution comes back SUPPLIER. A label
+        printed with no pickup scan is consistent with a supplier that never
+        handed the goods over *and* with a courier that never came, so it is
+        UNATTRIBUTED and nobody's reputation moves on it.
+
+    record_incident is idempotent per (po_id, observed), so re-reading
+    tracking does not compound either axis.
     """
-    if row["supplier_claim"] != "dispatched":
+    if not attribution.has_discrepancy(row):
         return
-    if row["tracking_status"] not in CONTRADICTING_STATUSES:
-        return
-    marker = f"trust_recorded:contradiction:{po_id}"
-    with db.connect() as conn:
-        already = conn.execute("SELECT 1 FROM sim_flags WHERE key = ?",
-                               (marker,)).fetchone()
-        if already:
-            return
+    with db.session() as conn:
         supplier = conn.execute(
             "SELECT supplier_id FROM purchase_orders WHERE po_id = ?",
             (po_id,)).fetchone()
-        if supplier is None:
-            return
-        conn.execute("INSERT INTO sim_flags (key, value) VALUES (?, '1')", (marker,))
-    trust_write(supplier["supplier_id"], "contradicted_claim")
+    if supplier is None:
+        return
+
+    verdict, basis, observed, expected = attribution.classify(row, db.sim_now())
+    record_incident(po_id=po_id, supplier_id=supplier["supplier_id"],
+                    observed=observed, expected=expected,
+                    attribution=verdict, attribution_basis=basis)
 
 
 # ---- T-05 simulated inbox ----------------------------------------------
@@ -268,7 +269,7 @@ def get_inbox(since: datetime | None = None) -> list[Message]:
     if since is not None:
         sql += " AND ts > ?"
         args.append(since.isoformat())
-    with db.connect() as conn:
+    with db.session() as conn:
         rows = conn.execute(sql + " ORDER BY ts, message_id", args).fetchall()
     return [_message(r) for r in rows]
 
@@ -282,7 +283,7 @@ def send_message(supplier_id: str, req: MessageRequest) -> Message:
     Goes to a SQLite table. There is no SMTP client, no IMAP client and no
     mail library anywhere in this repo (PS §18).
     """
-    with db.connect() as conn:
+    with db.session() as conn:
         known = conn.execute("SELECT 1 FROM suppliers WHERE supplier_id = ? LIMIT 1",
                              (supplier_id,)).fetchone()
         if known is None:
@@ -313,7 +314,7 @@ def send_message(supplier_id: str, req: MessageRequest) -> Message:
 
 def _record_reply_delay(supplier_id: str) -> None:
     """A reply that announces a delay is a late event, recorded once per reply."""
-    with db.connect() as conn:
+    with db.session() as conn:
         row = conn.execute(
             "SELECT message_id, body FROM messages WHERE sender = ?"
             " AND persona_reply = 1 ORDER BY message_id DESC LIMIT 1",
@@ -369,7 +370,7 @@ def request_rfq(req: RfqRequest) -> list[Quote]:
     # never age.
     now = db.advance_clock(db.SIM_TICK)
     quotes: list[Quote] = []
-    with db.connect() as conn:
+    with db.session() as conn:
         for supplier_id in req.supplier_ids:
             row = conn.execute(
                 "SELECT * FROM suppliers WHERE supplier_id = ? AND component_id = ?",
@@ -434,7 +435,7 @@ def erp_update(req: ErpRequest) -> dict:
             detail=f"unknown action: {req.action}. "
                    f"PS §5.9 permits only: {', '.join(ERP_ACTIONS)}")
     now = db.sim_now()
-    with db.connect() as conn:
+    with db.session() as conn:
         n = conn.execute("SELECT COUNT(*) FROM erp_log").fetchone()[0]
         record_id = f"ERP-{n + 1:04d}"
         conn.execute(

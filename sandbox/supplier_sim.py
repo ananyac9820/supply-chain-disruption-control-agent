@@ -49,7 +49,7 @@ def is_specific_follow_up(body: str) -> bool:
 
 
 def persona_of(supplier_id: str) -> str:
-    with db.connect() as conn:
+    with db.session() as conn:
         row = conn.execute(
             "SELECT persona FROM suppliers WHERE supplier_id = ? LIMIT 1",
             (supplier_id,)).fetchone()
@@ -89,7 +89,7 @@ def queue_reply(supplier_id: str, follow_up_body: str) -> str | None:
     The reply is stored with visible_at at the new time, so it is invisible to
     the /inbox read inside the same call and appears on the next one.
     """
-    with db.connect() as conn:
+    with db.session() as conn:
         row = conn.execute(
             "SELECT persona FROM suppliers WHERE supplier_id = ? LIMIT 1",
             (supplier_id,)).fetchone()
@@ -114,7 +114,7 @@ def queue_reply(supplier_id: str, follow_up_body: str) -> str | None:
     body = reply_body(persona, prior + 1, follow_up_body,
                       has_claimed_dispatch=claimed_dispatch)
 
-    with db.connect() as conn:
+    with db.session() as conn:
         conn.execute(
             "INSERT INTO messages (message_id, sender, recipient, subject, body,"
             " related_po_id, ts, visible_at, persona_reply)"

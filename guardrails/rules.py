@@ -137,17 +137,44 @@ def g8_quote_expiry(plan: SolverOutput, context: dict) -> Finding | None:
     )
 
 
-def g9_contradicted_claim(plan: SolverOutput, context: dict) -> Finding | None:
-    """A contradicted claim may not support a plan. Those units count as zero."""
-    contradicted = {c["supplier_id"] for c in context.get("claims", [])
-                    if c.get("status") == "CONTRADICTED"}
-    used = {a.supplier_id for a in plan.allocations} & contradicted
-    if not used:
+# Below this, a shipment's units are not counted as confirmed. Mirrors
+# trust.UNCONFIRMED_BELOW; a test asserts the two agree. guardrails/ stays
+# free of any dependency on the ledger or the database.
+DEFAULT_UNCONFIRMED_BELOW = 0.5
+
+
+def g9_unconfirmed_shipment(plan: SolverOutput, context: dict) -> Finding | None:
+    """Units we cannot confirm may not be counted on.
+
+    This keys on shipment confidence, not on reputation. The units are
+    excluded because the evidence does not establish that they exist and are
+    moving — not because anyone has concluded the supplier acted in bad faith.
+    A shipment can be unverifiable through a courier's failure, or through
+    nobody's failure at all, and the plan has to treat it the same way in
+    every case: as units it cannot count.
+
+    Nothing here is a finding about the supplier. Attribution is recorded
+    separately, on the incident, and only an incident attributed to the
+    supplier reaches reputation.
+    """
+    threshold = context.get("unconfirmed_below", DEFAULT_UNCONFIRMED_BELOW)
+    confidence = dict(context.get("shipment_confidence", {}))
+
+    # Legacy input: a caller still supplying claims gets the same protection.
+    for claim in context.get("claims", []):
+        if claim.get("status") == "CONTRADICTED":
+            confidence.setdefault(claim["supplier_id"], 0.0)
+
+    unconfirmed = sorted(
+        a.supplier_id for a in plan.allocations
+        if confidence.get(a.supplier_id, 1.0) < threshold)
+    if not unconfirmed:
         return None
     return Finding(
         "G9",
-        f"plan depends on {', '.join(sorted(used))}, whose claim is "
-        f"CONTRADICTED — those units count as 0 confirmed",
+        f"claim inconsistent with tracking evidence for "
+        f"{', '.join(unconfirmed)}; units unconfirmed and not counted toward "
+        f"coverage",
     )
 
 
@@ -166,4 +193,4 @@ def g12_infeasible(plan: SolverOutput, context: dict) -> Finding | None:
 
 
 POST_CHECKS = (g1_budget, g2_approval, g5_safety_stock, g8_quote_expiry,
-               g9_contradicted_claim, g12_infeasible)
+               g9_unconfirmed_shipment, g12_infeasible)

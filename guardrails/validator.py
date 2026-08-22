@@ -19,11 +19,16 @@ projected stock gets no G5 rather than a crash.
 | `affected_priorities`               | list[str]       | G5 |
 | `safety_stock_breach_justification` | str \\| None     | G5 |
 | `quotes`                            | list[dict]      | G8 |
-| `claims`                            | list[dict]      | G9 |
+| `shipment_confidence`               | dict[str,float] | G9 |
+| `unconfirmed_below`                 | float           | G9 |
+| `claims`                            | list[dict]      | G9 (legacy) |
 | `now`                               | datetime \\| str | G8 |
 
 `quotes` entries carry `supplier_id`, `issued_at`, `quote_valid_hours`.
-`claims` entries carry `supplier_id` and `status`.
+`shipment_confidence` maps supplier_id to a confidence in 0..1; below
+`unconfirmed_below` (default 0.5) that supplier's units are not counted.
+`claims` is still read for callers that have not moved over: a status of
+CONTRADICTED is treated as confidence 0.0.
 """
 
 from contracts.models import SolverOutput, Verdict
@@ -74,7 +79,7 @@ def vetoed(verdict: Verdict) -> bool:
 
       G1  re-solve under a tighter cap — same inputs, lower budget
       G5  re-solve preserving safety stock, or record a justification
-      G9  re-solve without that supplier; its units count as 0 confirmed
+      G9  re-solve without those units; they cannot be confirmed
       G8  **fetch a fresh quote first** — see REQUOTE_RULES and
           needs_fresh_quote(). Re-solving directly is permitted and will
           terminate, but it discards a supplier that one RFQ would restore.

@@ -25,14 +25,14 @@ from contracts.constants import APPROVAL_THRESHOLD, EMERGENCY_BUDGET
 from guardrails.validator import validate
 from sandbox.client import HttpSandbox
 from solver import solve
-from solver.build import build_solver_input
+from solver.build import build_solver_input, unconfirmed_shipment_suppliers
 
 EVENTS = [f"H-{n:02d}" for n in range(1, 11)]
 
 CASCADES = [
     (["H-02", "H-06"], "stock corrected down, then demand spikes"),
     (["H-07", "H-09"], "expedite withdrawn, then costs rise"),
-    (["H-08", "H-04"], "a supplier caught lying while the reliable alternative is short"),
+    (["H-08", "H-04"], "an unverifiable shipment while the reliable alternative is short"),
 ]
 
 INTENT = {
@@ -43,7 +43,7 @@ INTENT = {
     "H-05": "low-reliability supplier is fastest",
     "H-06": "demand spike mid-run",
     "H-07": "expedite becomes unavailable",
-    "H-08": "supplier claims dispatch, tracking contradicts",
+    "H-08": "supplier claims dispatch, tracking does not support it",
     "H-09": "purchase exceeds approval limit",
     "H-10": "production priority changes mid-simulation",
 }
@@ -71,33 +71,33 @@ def changed_keys(before: dict, after: dict) -> list[str]:
             != json.dumps(after[k], sort_keys=True)]
 
 
-def contradicted_suppliers(world: HttpSandbox) -> set[str]:
-    """What a verification step would conclude from tracking."""
-    found = set()
+def unconfirmed_suppliers(world: HttpSandbox) -> set[str]:
+    """Suppliers whose in-transit units a verification step cannot confirm.
+
+    Reading tracking is what records the incident and drops that shipment's
+    confidence, so the read has to happen before the confidence is consulted.
+    """
     for po in world.get_purchase_orders():
         try:
-            record = world.get_tracking(po.po_id)
+            world.get_tracking(po.po_id)
         except Exception:
             continue
-        if (record.supplier_claim == "dispatched"
-                and record.tracking_status == "label_created_no_pickup"):
-            found.add(po.supplier_id)
-    return found
+    return unconfirmed_shipment_suppliers(world)
 
 
 def evaluate(world: HttpSandbox) -> dict:
     """Solve and validate exactly as the demo path does."""
-    contradicted = contradicted_suppliers(world)
+    unconfirmed = unconfirmed_suppliers(world)
     rung1 = solve(build_solver_input(
         world, "COMP-104", budget_cap=EMERGENCY_BUDGET,
-        contradicted=contradicted, allow_reschedule=False))
+        contradicted=unconfirmed, allow_reschedule=False))
     full = solve(build_solver_input(
         world, "COMP-104", budget_cap=EMERGENCY_BUDGET,
-        contradicted=contradicted, allow_reschedule=True))
+        contradicted=unconfirmed, allow_reschedule=True))
     verdict = validate(full, {"approval_limit": float(APPROVAL_THRESHOLD),
                               "remaining_budget": float(EMERGENCY_BUDGET)})
     return {"rung1": rung1, "full": full, "verdict": verdict,
-            "contradicted": sorted(contradicted)}
+            "unconfirmed": sorted(unconfirmed)}
 
 
 def run_case(world: HttpSandbox, events: list[str]) -> dict:
@@ -244,20 +244,22 @@ run their own version of these.
 The baseline plan in a freshly reseeded world is already
 `OPTIMAL · reschedule · 152,010`, with G2 firing. That is the first finding.
 
-### 1. The seed already contains the contradiction, so H-08 injects a message and nothing else
+### 1. The seed already carries the unsupported claim, so H-08 injects a message and nothing else
 
 `tracking/PO-7712` ships as `supplier_claim: dispatched` against
 `tracking_status: label_created_no_pickup`. Any agent that checks tracking
-finds SUP-21 contradicted on its first read, before H-08 fires. H-08's only
-observable effect is the inbox message.
+finds PO-7712's units unconfirmable on its first read, before H-08 fires.
+H-08's only observable effect is the inbox message. Note that this records an
+UNATTRIBUTED incident: the shipment cannot be counted, and no one's
+reputation moves.
 
 This is not straightforwardly fixable: `contracts/stub_sandbox.py` is frozen
 and returns that contradiction unconditionally, and `tests/contract/` asserts
 stub and live sandbox agree. Changing the seed to start clean would break the
 parity that is the merge insurance.
 
-The consequence for the demo: Act 2 is the agent *discovering* a pre-existing
-lie, not the world telling a new one. `demo/run_acts.py` handles this by
+The consequence for the demo: Act 2 is the agent *discovering* a
+pre-existing discrepancy, not the world creating a new one. `demo/run_acts.py` handles this by
 solving twice — once trusting SUP-21, once not — which is a counterfactual,
 not a timeline. Worth saying out loud that way rather than implying the claim
 arrived mid-run.
@@ -294,15 +296,46 @@ different pre-existing exclusion.
 The three combinations behave additively; none produced a state the single
 events did not. H-07 → H-09 is indistinguishable from H-09 alone, for the
 reason in finding 2. H-08 → H-04 is indistinguishable from the baseline: the
-lie is already in the seed, and cutting SUP-37 to 200 units does not bind
-because the plan only draws 110 from it.
+discrepancy is already in the seed, and cutting SUP-37 to 200 units does not
+bind because the plan only draws 110 from it.
 
 H-02 → H-06 is the one worth keeping. Neither event moves the plan, but both
 move the *baseline counterfactual* — coverage drops from 4.33 days to 3.0, and
 the cost of doing nothing rises. A judge asking "what changed?" gets a real
 answer from the brief even though the allocation is identical.
 
-### 5. No guardrail missed a plan it should have caught
+### 5. The Act 3 escalation holds on margin, not by construction
+
+The attribution change stopped reputation moving on the PO-7712 discrepancy,
+so SUP-21 now carries `effective_reliability 0.72` in the counted-units solve
+rather than the 0.57 it used to. The Act 3 delta survived that at exactly
+8,690, but it survived on headroom rather than because anything guarantees it:
+
+| supplier | price | eff.rel | risk-adjusted |
+|---|---|---|---|
+| SUP-21 | 118.0 | 0.72 | **129.2** |
+| SUP-42 | 132.0 | 0.81 | 139.6 |
+| SUP-55 | 126.0 | 0.55 | 144.0 |
+| SUP-37 | 141.0 | 0.88 | 145.8 |
+
+SUP-21 leads SUP-42 by **10.4 per unit** on risk-adjusted cost. That is the
+margin the demo rides on: while SUP-21 stays cheapest adjusted, the
+counted-units plan is 143,320 and the delta against the unconfirmed plan is
+8,690. Reduce the headroom to zero and the counted-units allocation changes,
+the delta changes with it, and Act 3 needs re-narrating.
+
+Two ways it could go:
+
+- **Seed prices move.** Any change to SUP-21's or SUP-42's `unit_price`, or
+  to either reliability score, moves this directly. Re-run the numbers before
+  trusting the script.
+- **Reputation starts moving again.** A penalty above **0.26** flips the
+  ranking (10.4 ÷ W_RISK 40). One SUPPLIER-attributed incident is 0.15 and
+  does not flip it; two, at 0.30, do. So if PO-7712's discrepancy ever
+  becomes attributable — or a second attributed incident lands on SUP-21 —
+  the Act 3 contrast changes.
+
+### 6. No guardrail missed a plan it should have caught
 
 Every feasible plan above 150,000 fired G2. The one INFEASIBLE result (H-10)
 fired G12 with a named binding constraint. No plan reached a verdict of

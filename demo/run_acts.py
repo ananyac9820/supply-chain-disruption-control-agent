@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Acts 1-3 against the sandbox and solver directly, as a repeatable harness.
+"""Acts 1-3 against the sandbox and solver directly — the demo harness.
+
+The only one. An earlier second harness (run_demo.py) was folded in here and
+deleted: it had drifted behind this one, and a superseded harness that still
+encodes a rejected behaviour is worse than no harness if someone opens it
+during judging.
 
 Person B wires the agent in after the merge. For now this proves the *world*
 behaves correctly in sequence — the class of bug that unit tests cannot see,
@@ -31,8 +36,10 @@ from contracts.constants import APPROVAL_THRESHOLD, EMERGENCY_BUDGET
 from guardrails.validator import validate
 from sandbox.client import HttpSandbox
 from solver import solve
-from solver.build import baseline, build_solver_input
-from trust import effective_reliability, trust_read
+from solver.build import (baseline, build_solver_input,
+                          unconfirmed_shipment_suppliers)
+from trust import (effective_reliability, incidents_for, reputation,
+                   shipment_confidence)
 
 RULE = "─" * 78
 FAILURES: list[str] = []
@@ -112,11 +119,24 @@ def act_one(world: HttpSandbox) -> None:
          f" · misses {', '.join(base['deadline_misses'])}")
     check("doing nothing misses a deadline", bool(base["deadline_misses"]))
 
+    step("Quote the alternates and solve")
+    world.request_rfq("COMP-104", 700, 4, ["SUP-42", "SUP-37", "SUP-55", "SUP-18"])
+    plan = solve(build_solver_input(world, "COMP-104", budget_cap=EMERGENCY_BUDGET))
+    show_plan(plan)
+    check("a recovery plan exists", plan.status != "INFEASIBLE")
+    check("SUP-18 carries none of it — cheapest and fastest, uncertified",
+          "SUP-18" not in {a.supplier_id for a in plan.allocations})
+
+    step("Write the outcome back to the simulated ERP")
+    result = world.erp_update("mark_po_delayed", {"po_id": "PO-7712"})
+    line(f"erp_update -> {result['status']} {result['record_id']}")
+    check("the ERP write landed", result["status"] == "ok")
+
 
 # ---- Act 2 --------------------------------------------------------------
 
 def act_two(world: HttpSandbox) -> None:
-    act(2, "a vague reply, a dispatch claim, and tracking that disagrees")
+    act(2, "a vague reply, a dispatch claim, and evidence that does not support it")
 
     step("SUP-55 (vague persona) is asked for status")
     world.send_message("SUP-55", "PO status", "Any update on this order?")
@@ -138,7 +158,7 @@ def act_two(world: HttpSandbox) -> None:
     line(f'"{claim.body}"')
     check("SUP-21 claims dispatch", "dispatched" in claim.body.lower())
 
-    step("Check tracking — ground truth, and the ledger records what it finds")
+    step("Check tracking — ground truth, and record what the evidence shows")
     catalog = {s.supplier_id: s for s in world.get_suppliers("COMP-104")}
     before = effective_reliability("SUP-21", catalog["SUP-21"].reliability_score)
 
@@ -148,18 +168,33 @@ def act_two(world: HttpSandbox) -> None:
          f" · last_movement {tracking.last_movement}")
 
     after = effective_reliability("SUP-21", catalog["SUP-21"].reliability_score)
-    ledger = trust_read("SUP-21")
-    line(f"catalog reliability_score  {catalog['SUP-21'].reliability_score:.2f}"
-         f"  (unchanged — the catalog is not ours to edit)")
-    line(f"effective_reliability      {before:.2f} -> {after:.2f}"
-         f"  ({ledger.contradicted_claims} contradicted claim,"
-         f" penalty {before - after:.2f})")
-    check("the claim is contradicted by tracking",
+
+    line("")
+    for inc in incidents_for("PO-7712"):
+        line(f"incident {inc['incident_id']}  attribution {inc['attribution']}")
+        line(f"    observed: {inc['observed']}")
+        line(f"    expected: {inc['expected']}")
+        line(f"    basis:    {inc['attribution_basis']}")
+    line("")
+    line(f"shipment_confidence(PO-7712)  1.00 -> {shipment_confidence('PO-7712'):.2f}"
+         f"   these units cannot be counted")
+    line(f"reputation (effective_reliability)  {before:.2f} -> {after:.2f}"
+         f"   unchanged — the evidence does not attribute this to the supplier")
+
+    check("the claim is not supported by tracking",
           tracking.supplier_claim == "dispatched"
           and tracking.tracking_status == "label_created_no_pickup")
-    check("trust_write fired", ledger.contradicted_claims == 1)
-    check("effective_reliability moved and reliability_score did not",
-          after < before and catalog["SUP-21"].reliability_score == 0.72)
+    check("an incident is recorded regardless of fault",
+          len(incidents_for("PO-7712")) == 1)
+    check("the incident is UNATTRIBUTED",
+          incidents_for("PO-7712")[0]["attribution"] == "UNATTRIBUTED",
+          "a label with no pickup fits both a supplier that never tendered "
+          "and a courier that never came")
+    check("shipment confidence drops", shipment_confidence("PO-7712") < 1.0)
+    check("reputation does not move", after == before,
+          "no one is penalised on ambiguous evidence")
+    check("and the catalog score is untouched",
+          catalog["SUP-21"].reliability_score == 0.72)
 
     step("Both scores are visible side by side on GET /suppliers")
     for row in world.get_suppliers_with_trust("COMP-104"):
@@ -170,7 +205,7 @@ def act_two(world: HttpSandbox) -> None:
 # ---- Act 3 --------------------------------------------------------------
 
 def act_three(world: HttpSandbox) -> None:
-    act(3, "what catching the lie costs, and why a human is now needed")
+    act(3, "what an unverifiable shipment costs, and why a human is now needed")
 
     def solve_both(contradicted: set[str]):
         rung1 = solve(build_solver_input(
@@ -181,14 +216,14 @@ def act_three(world: HttpSandbox) -> None:
             contradicted=contradicted, allow_reschedule=True))
         return rung1, full
 
-    step("Solve with claim_contradicted = False — SUP-21 still a candidate")
+    step("Solve counting SUP-21's units as confirmed")
     trusting_rung1, trusting = solve_both(set())
     line("rung 1, procurement only:")
     show_plan(trusting_rung1)
     line("full ladder:")
     show_plan(trusting)
 
-    step("Solve with claim_contradicted = True — SUP-21's units count as zero")
+    step("Solve with those units unconfirmed — the evidence does not support them")
     verified_rung1, verified = solve_both({"SUP-21"})
     line("rung 1, procurement only:")
     show_plan(verified_rung1)
@@ -209,38 +244,61 @@ def act_three(world: HttpSandbox) -> None:
 
     delta = verified.total_cost - trusting.total_cost
     line("")
-    line(f"trusting SUP-21   {trusting.total_cost:>12,.2f}"
+    line(f"units counted     {trusting.total_cost:>12,.2f}"
          f"   approval {'required' if trusting.requires_approval else 'not required'}")
-    line(f"verified SUP-21   {verified.total_cost:>12,.2f}"
+    line(f"units unconfirmed {verified.total_cost:>12,.2f}"
          f"   approval {'required' if verified.requires_approval else 'not required'}")
     line(f"                  {'-' * 12}")
-    line(f"cost of the lie   {delta:>12,.2f}")
+    line(f"cost of the gap   {delta:>12,.2f}")
     line("")
-    line(f"That delta is the causal link: catching SUP-21 lying is what pushes")
-    line(f"the plan from {trusting.total_cost:,.0f} to {verified.total_cost:,.0f},"
-         f" across the {APPROVAL_THRESHOLD:,} threshold.")
-    line(f"Without the verification step there is no approval gate to demonstrate.")
+    line(f"That delta is the causal link: finding that PO-7712's units cannot be")
+    line(f"confirmed pushes the plan from {trusting.total_cost:,.0f} to"
+         f" {verified.total_cost:,.0f}, across the {APPROVAL_THRESHOLD:,} threshold.")
+    line(f"It is the verification step that creates the approval decision —")
+    line(f"not a judgement about the supplier, whose reputation has not moved.")
 
     check("the cost moves by 8,690", round(delta, 2) == 8690.00, f"{delta:,.2f}")
-    check("the trusting plan sits below the threshold",
+    check("counting the units keeps it below the threshold",
           not trusting.requires_approval)
-    check("the verified plan crosses it", verified.requires_approval)
+    check("excluding them crosses it", verified.requires_approval)
 
     step("Guardrails on each plan")
     context = {"approval_limit": float(APPROVAL_THRESHOLD),
                "remaining_budget": float(EMERGENCY_BUDGET)}
     trusting_verdict = validate(trusting, context)
     verified_verdict = validate(verified, context)
-    line(f"trusting plan: fired {trusting_verdict.fired or 'nothing'}"
+    line(f"units counted: fired {trusting_verdict.fired or 'nothing'}"
          f" · forced_escalation {trusting_verdict.forced_escalation}")
-    line(f"verified plan: fired {verified_verdict.fired or 'nothing'}"
+    line(f"unconfirmed:   fired {verified_verdict.fired or 'nothing'}"
          f" · forced_escalation {verified_verdict.forced_escalation}")
     for reason in verified_verdict.reasons:
         line(f"    {reason}")
-    check("G2 does not fire on the trusting plan",
+    check("G2 does not fire when the units are counted",
           "G2" not in trusting_verdict.fired)
-    check("G2 fires on the verified plan", "G2" in verified_verdict.fired)
+    check("G2 fires when they are excluded", "G2" in verified_verdict.fired)
     check("and forces escalation", verified_verdict.forced_escalation)
+
+    step("Coda — H-09 raises the alternates 40% on top of all this")
+    world.sim_inject("H-09")
+    escalated = solve(build_solver_input(
+        world, "COMP-104", budget_cap=EMERGENCY_BUDGET,
+        contradicted=unconfirmed_shipment_suppliers(world), allow_reschedule=True))
+    show_plan(escalated)
+    approval = world.check_approval("create_alternate_po", escalated.total_cost)
+    line(f"{escalated.total_cost:,.2f} against a threshold of "
+         f"{APPROVAL_THRESHOLD:,} -> approval "
+         f"{'required' if approval.approval_required else 'not required'}")
+    line(f"reason: {approval.approval_reason}")
+    check("still feasible once costs rise", escalated.status != "INFEASIBLE")
+    check("/approval/check agrees with the solver",
+          approval.approval_required == escalated.requires_approval)
+
+    step("Record the escalation in the simulated ERP")
+    recorded = world.erp_update("record_escalation", {
+        "component_id": "COMP-104", "total_cost": escalated.total_cost,
+        "reason": approval.approval_reason})
+    line(f"erp_update -> {recorded['status']} {recorded['record_id']}")
+    check("the escalation was recorded", recorded["status"] == "ok")
 
 
 # ---- harness ------------------------------------------------------------
