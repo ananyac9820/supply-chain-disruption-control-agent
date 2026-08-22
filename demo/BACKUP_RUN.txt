@@ -1,0 +1,205 @@
+REHEARSAL · simulated clock 2026-09-02T10:00:00 · Act 4 injection H-10
+
+──────────────────────────────────────────────────────────────────────────────
+ACT 1 — SUP-21 delays PO-7712
+──────────────────────────────────────────────────────────────────────────────
+
+▸ Inject H-01
+   PO-7712 expected_delivery 2026-09-03 -> 2026-09-08
+
+▸ Read inventory — reason from usable_stock, never the header figure
+   current_stock 420 · usable_stock 390 · safety_stock 150 · daily_usage 90
+   coverage 4.33 days   (usable, not the 4.67 the header implies)
+   ✓ the header overstates what is usable
+
+▸ Read the production schedule
+   PROD-914   700 units  due 2026-09-04  low    max_delay 5d
+   PROD-882   700 units  due 2026-09-06  high   max_delay 0d
+   ✓ the delayable order falls due first — otherwise rescheduling frees nothing
+
+▸ Cumulative shortfall — orders consume stock in deadline order
+   on hand above safety stock: 390 - 150 = 240
+   PROD-914 needs  700 · covered  240 · short  460
+   PROD-882 needs  700 · covered    0 · short  700
+   cumulative shortfall 1160 units · 12.89 production days · misses PROD-914, PROD-882
+   ✓ doing nothing misses a deadline
+
+▸ Quote the alternates and solve
+       status OPTIMAL · rung reschedule · cost 143,320.00 · approval not required
+         SUP-21    700 units  @day 6     82,600.00
+         SUP-42    460 units  @day 4     60,720.00
+         delay PROD-914 by 4 days
+   ✓ a recovery plan exists
+   ✓ SUP-18 carries none of it — cheapest and fastest, uncertified
+
+▸ Write the outcome back to the simulated ERP
+   erp_update -> ok ERP-0001
+   ✓ the ERP write landed
+
+══════════════════════════════════════════════════════════════════════════════
+◆ ACT 1 BOUNDARY — the disruption and the cost of doing nothing
+◆ elapsed 0:00.0
+══════════════════════════════════════════════════════════════════════════════
+
+──────────────────────────────────────────────────────────────────────────────
+ACT 2 — a vague reply, a dispatch claim, and evidence that does not support it
+──────────────────────────────────────────────────────────────────────────────
+
+▸ SUP-55 (vague persona) is asked for status
+   "We are looking into this and will update you soon."
+   ✓ no date and no quantity
+
+▸ Follow up with a question naming a date and a quantity
+   "Understood. Confirmed: 300 units, dispatch 2026-09-05, delivery by 2026-09-09."
+   ✓ the challenge produces specifics
+
+▸ SUP-21 (contradictory persona) is asked about PO-7712
+   "Your order has been dispatched from our facility today. Tracking will update shortly."
+   ✓ SUP-21 claims dispatch
+
+▸ Check tracking — ground truth, and record what the evidence shows
+   supplier_claim 'dispatched' · tracking_status 'label_created_no_pickup' · last_movement None
+   
+   incident INC-0001  attribution UNATTRIBUTED
+       observed: tracking_status 'label_created_no_pickup', no movement recorded
+       expected: goods with the carrier and moving
+       basis:    a label exists but no pickup was scanned; consistent both with goods never tendered and with a collection that was never made
+   
+   shipment_confidence(PO-7712)  1.00 -> 0.40   these units cannot be counted
+   reputation (effective_reliability)  0.72 -> 0.72   unchanged — the evidence does not attribute this to the supplier
+   ✓ the claim is not supported by tracking
+   ✓ an incident is recorded regardless of fault
+   ✓ the incident is UNATTRIBUTED — a label with no pickup fits both a supplier that never tendered and a courier that never came
+   ✓ shipment confidence drops
+   ✓ reputation does not move — no one is penalised on ambiguous evidence
+   ✓ and the catalog score is untouched
+
+▸ Both scores are visible side by side on GET /suppliers
+   SUP-18  catalog 0.65  effective 0.65
+   SUP-21  catalog 0.72  effective 0.72
+   SUP-37  catalog 0.88  effective 0.88
+   SUP-42  catalog 0.81  effective 0.81
+   SUP-55  catalog 0.55  effective 0.55
+
+══════════════════════════════════════════════════════════════════════════════
+◆ ACT 2 BOUNDARY — the incident, and what the evidence does not say
+◆ elapsed 0:00.1
+══════════════════════════════════════════════════════════════════════════════
+
+──────────────────────────────────────────────────────────────────────────────
+ACT 3 — what an unverifiable shipment costs, and why a human is now needed
+──────────────────────────────────────────────────────────────────────────────
+
+▸ Solve counting SUP-21's units as confirmed
+   rung 1, procurement only:
+       status INFEASIBLE · rung None · cost 0.00 · approval not required
+         binding constraint: deadline
+   full ladder:
+       status OPTIMAL · rung reschedule · cost 143,320.00 · approval not required
+         SUP-21    700 units  @day 6     82,600.00
+         SUP-42    460 units  @day 4     60,720.00
+         delay PROD-914 by 4 days
+
+▸ Solve with those units unconfirmed — the evidence does not support them
+   rung 1, procurement only:
+       status INFEASIBLE · rung None · cost 0.00 · approval not required
+         binding constraint: deadline
+   full ladder:
+       status OPTIMAL · rung reschedule · cost 152,010.00 · approval REQUIRED
+         SUP-37    110 units  @day 6     15,510.00
+         SUP-42    700 units  @day 4     92,400.00
+         SUP-55    350 units  @day 5     44,100.00
+         delay PROD-914 by 4 days
+
+▸ What changed
+   ✓ rung 1 is INFEASIBLE either way — binding deadline / deadline
+   ✓ both land on a 4-day PROD-914 delay — the reschedule lever is not what moved
+   
+   units counted       143,320.00   approval not required
+   units unconfirmed   152,010.00   approval required
+                     ------------
+   cost of the gap       8,690.00
+   
+   That delta is the causal link: finding that PO-7712's units cannot be
+   confirmed pushes the plan from 143,320 to 152,010, across the 150,000 threshold.
+   It is the verification step that creates the approval decision —
+   not a judgement about the supplier, whose reputation has not moved.
+   ✓ the cost moves by 8,690 — 8,690.00
+   ✓ counting the units keeps it below the threshold
+   ✓ excluding them crosses it
+
+▸ Guardrails on each plan
+   units counted: fired nothing · forced_escalation False
+   unconfirmed:   fired ['G2'] · forced_escalation True
+       plan costs 152,010.00, exceeding the autonomous purchase threshold of 150,000 by 2,010.00
+   ✓ G2 does not fire when the units are counted
+   ✓ G2 fires when they are excluded
+   ✓ and forces escalation
+
+▸ Coda — H-09 raises the alternates 40% on top of all this
+       status OPTIMAL · rung reschedule · cost 212,814.00 · approval REQUIRED
+         SUP-37    110 units  @day 6     21,714.00
+         SUP-42    700 units  @day 4    129,360.00
+         SUP-55    350 units  @day 5     61,740.00
+         delay PROD-914 by 4 days
+   212,814.00 against a threshold of 150,000 -> approval required
+   reason: Cost exceeds autonomous purchase threshold of 150000
+   ✓ still feasible once costs rise
+   ✓ /approval/check agrees with the solver
+
+▸ Record the escalation in the simulated ERP
+   erp_update -> ok ERP-0002
+   ✓ the escalation was recorded
+
+══════════════════════════════════════════════════════════════════════════════
+◆ ACT 3 BOUNDARY — infeasible, then rescheduled, then escalated
+◆ elapsed 0:00.1
+══════════════════════════════════════════════════════════════════════════════
+
+──────────────────────────────────────────────────────────────────────────────
+ACT 4 — a live injection — H-10, fired mid-demo
+──────────────────────────────────────────────────────────────────────────────
+
+▸ Before: the plan currently on the table
+       status OPTIMAL · rung reschedule · cost 212,814.00 · approval REQUIRED
+         SUP-37    110 units  @day 6     21,714.00
+         SUP-42    700 units  @day 4    129,360.00
+         SUP-55    350 units  @day 5     61,740.00
+         delay PROD-914 by 4 days
+
+▸ Inject H-10 — nobody typed this in advance
+   production_order_id: PROD-914
+   priority: high
+   max_delay_days: 0
+   was: {'priority': 'low', 'max_delay_days': 5}
+
+▸ The world is re-read and the plan re-solved
+       status INFEASIBLE · rung None · cost 0.00 · approval not required
+         binding constraint: deadline
+   
+   guardrails: G5, G12 · forced_escalation True
+       plan leaves projected stock at 0 against a safety floor of 150 (150 short) with no justification recorded
+       no feasible plan after the full relaxation ladder; binding constraint: deadline
+   ✓ the injection changed the plan — OPTIMAL 212,814 -> INFEASIBLE 0
+   ✓ and it names what bound, not just that it failed — deadline
+   ✓ the guardrails escalate rather than execute
+
+══════════════════════════════════════════════════════════════════════════════
+◆ ACT 4 BOUNDARY — live injection (H-10)
+◆ elapsed 0:00.1
+══════════════════════════════════════════════════════════════════════════════
+
+──────────────────────────────────────────────────────────────────────────────
+TIMING
+──────────────────────────────────────────────────────────────────────────────
+   Act 1     0.0s   the disruption and the cost of doing nothing
+   Act 2     0.0s   the incident, and what the evidence does not say
+   Act 3     0.0s   infeasible, then rescheduled, then escalated
+   Act 4     0.0s   live injection (H-10)
+   total     0.1s
+
+   Machine time only. The twelve-minute budget is narration; these
+   numbers say the software will never be what makes you late.
+
+──────────────────────────────────────────────────────────────────────────────
+All checks held across all four acts.
