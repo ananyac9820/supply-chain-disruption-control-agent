@@ -1,0 +1,26 @@
+# Packaging and test-path plumbing only. Not part of the frozen surface.
+# Exists so `pytest` works from any directory and `pip install -e .` works
+# once the track folders land — nobody should be fighting sys.path at hour 14.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scda"
+version = "0.1.0"
+description = "Supply Chain Disruption Control Agent — HOP 2026"
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+# Folders that do not exist yet are simply not found. No entry needs adding
+# when sandbox/, guardrails/, agent/ or output/ appear.
+include = ["contracts*", "solver*", "guardrails*", "sandbox*", "agent*", "output*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
