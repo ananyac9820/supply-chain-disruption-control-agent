@@ -1,0 +1,9 @@
+{
+  "status": "INFEASIBLE",
+  "allocations": [],
+  "reschedules": [],
+  "total_cost": 0.0,
+  "requires_approval": false,
+  "binding_constraint": "available_quantity",
+  "relaxation_used": null
+}

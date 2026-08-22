@@ -1,0 +1,22 @@
+[
+  {
+    "production_order_id": "PROD-914",
+    "product": "Auxiliary Drive Unit",
+    "required_component": "COMP-104",
+    "units_planned": 700,
+    "component_required_per_unit": 1,
+    "deadline": "2026-09-04",
+    "priority": "low",
+    "max_delay_days": 5
+  },
+  {
+    "production_order_id": "PROD-882",
+    "product": "Traction Controller",
+    "required_component": "COMP-104",
+    "units_planned": 700,
+    "component_required_per_unit": 1,
+    "deadline": "2026-09-06",
+    "priority": "high",
+    "max_delay_days": 0
+  }
+]

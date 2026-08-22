@@ -1,0 +1,58 @@
+{
+  "component_id": "COMP-401",
+  "usable_stock": 550,
+  "safety_stock": 150,
+  "daily_usage": 80,
+  "suppliers": [
+    {
+      "supplier_id": "SUP-A",
+      "unit_price": 100.0,
+      "lead_time_days": 3,
+      "available_quantity": 500,
+      "min_order_quantity": 100,
+      "effective_reliability": 0.9,
+      "certified": true,
+      "quality_score": 0.95,
+      "quote_expired": false,
+      "claim_contradicted": false
+    },
+    {
+      "supplier_id": "SUP-B",
+      "unit_price": 110.0,
+      "lead_time_days": 3,
+      "available_quantity": 500,
+      "min_order_quantity": 100,
+      "effective_reliability": 0.95,
+      "certified": true,
+      "quality_score": 0.95,
+      "quote_expired": false,
+      "claim_contradicted": false
+    },
+    {
+      "supplier_id": "SUP-C",
+      "unit_price": 130.0,
+      "lead_time_days": 2,
+      "available_quantity": 500,
+      "min_order_quantity": 100,
+      "effective_reliability": 0.99,
+      "certified": true,
+      "quality_score": 0.95,
+      "quote_expired": false,
+      "claim_contradicted": false
+    }
+  ],
+  "production_orders": [
+    {
+      "production_order_id": "PO-1",
+      "units_required": 800,
+      "deadline_day": 5,
+      "priority_weight": 5.0,
+      "max_delay_days": 0
+    }
+  ],
+  "min_quality": 0.9,
+  "budget_cap": 400000.0,
+  "approval_limit": 150000.0,
+  "allow_reschedule": false,
+  "allow_partial": false
+}

@@ -1,0 +1,46 @@
+{
+  "component_id": "COMP-407",
+  "usable_stock": 500,
+  "safety_stock": 100,
+  "daily_usage": 80,
+  "suppliers": [
+    {
+      "supplier_id": "SUP-X",
+      "unit_price": 100.0,
+      "lead_time_days": 3,
+      "available_quantity": 400,
+      "min_order_quantity": 100,
+      "effective_reliability": 0.9,
+      "certified": true,
+      "quality_score": 0.95,
+      "quote_expired": false,
+      "claim_contradicted": false
+    },
+    {
+      "supplier_id": "SUP-Y",
+      "unit_price": 105.0,
+      "lead_time_days": 3,
+      "available_quantity": 400,
+      "min_order_quantity": 100,
+      "effective_reliability": 0.95,
+      "certified": true,
+      "quality_score": 0.95,
+      "quote_expired": false,
+      "claim_contradicted": false
+    }
+  ],
+  "production_orders": [
+    {
+      "production_order_id": "PO-1",
+      "units_required": 800,
+      "deadline_day": 5,
+      "priority_weight": 5.0,
+      "max_delay_days": 0
+    }
+  ],
+  "min_quality": 0.9,
+  "budget_cap": 400000.0,
+  "approval_limit": 150000.0,
+  "allow_reschedule": false,
+  "allow_partial": false
+}

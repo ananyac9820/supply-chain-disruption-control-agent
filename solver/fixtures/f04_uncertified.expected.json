@@ -1,0 +1,16 @@
+{
+  "status": "OPTIMAL",
+  "allocations": [
+    {
+      "supplier_id": "SUP-42",
+      "units": 460,
+      "cost": 60720.0,
+      "arrival_day": 4
+    }
+  ],
+  "reschedules": [],
+  "total_cost": 60720.0,
+  "requires_approval": false,
+  "binding_constraint": null,
+  "relaxation_used": "none"
+}

@@ -1,0 +1,67 @@
+[
+  {
+    "supplier_id": "SUP-21",
+    "component_id": "COMP-104",
+    "supplier_name": "Meridian Components",
+    "unit_price": 118.0,
+    "lead_time_days": 6,
+    "available_quantity": 1000,
+    "quality_score": 0.91,
+    "reliability_score": 0.72,
+    "min_order_quantity": 200,
+    "certifications": ["ISO-9001", "Automotive-Grade"],
+    "persona": "contradictory"
+  },
+  {
+    "supplier_id": "SUP-42",
+    "component_id": "COMP-104",
+    "supplier_name": "Kestrel Electronics",
+    "unit_price": 132.0,
+    "lead_time_days": 4,
+    "available_quantity": 700,
+    "quality_score": 0.94,
+    "reliability_score": 0.81,
+    "min_order_quantity": 300,
+    "certifications": ["ISO-9001", "Automotive-Grade"],
+    "persona": "honest"
+  },
+  {
+    "supplier_id": "SUP-37",
+    "component_id": "COMP-104",
+    "supplier_name": "Ardent Semiconductor",
+    "unit_price": 141.0,
+    "lead_time_days": 6,
+    "available_quantity": 400,
+    "quality_score": 0.96,
+    "reliability_score": 0.88,
+    "min_order_quantity": 100,
+    "certifications": ["ISO-9001", "Automotive-Grade"],
+    "persona": "honest"
+  },
+  {
+    "supplier_id": "SUP-18",
+    "component_id": "COMP-104",
+    "supplier_name": "Novabyte Trading",
+    "unit_price": 104.0,
+    "lead_time_days": 3,
+    "available_quantity": 900,
+    "quality_score": 0.79,
+    "reliability_score": 0.65,
+    "min_order_quantity": 250,
+    "certifications": ["ISO-9001"],
+    "persona": "honest"
+  },
+  {
+    "supplier_id": "SUP-55",
+    "component_id": "COMP-104",
+    "supplier_name": "Pallas Industrial",
+    "unit_price": 126.0,
+    "lead_time_days": 5,
+    "available_quantity": 350,
+    "quality_score": 0.92,
+    "reliability_score": 0.55,
+    "min_order_quantity": 350,
+    "certifications": ["ISO-9001", "Automotive-Grade"],
+    "persona": "vague"
+  }
+]
