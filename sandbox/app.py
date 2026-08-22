@@ -1,23 +1,29 @@
 """The simulated ERP sandbox — FastAPI over one SQLite file.
 
-Fifteen endpoints (§4.6), localhost only, no auth, no async workers, no
-message queue. Response shapes come straight from contracts/models.py and are
-never adjusted for convenience.
+The §4.6 endpoints, localhost only, no auth, no async workers, no message
+queue. Response shapes come straight from contracts/models.py and are never
+adjusted for convenience.
 
 PS §18: nothing here reaches outside the process. No mail library, no ERP
-SDK, no payment library, no HTTP client. Prove it with the §2.6 grep.
+SDK, no payment library. Prove it with the §2.6 grep.
 
-STATUS: schema, seed and the inventory endpoint only. The remaining
-fourteen endpoints are deliberately not written yet — see README in this
-package.
+STATUS: everything except the chaos injector. POST /sim/inject and
+/sim/inject/sequence arrive with sandbox/chaos.py; the persona replies queued
+by POST /suppliers/{id}/message arrive with sandbox/supplier_sim.py.
 """
 
 import json
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel
 
-from contracts.models import Component
+from contracts.constants import APPROVAL_THRESHOLD
+from contracts.models import (
+    ApprovalResult, Component, Message, ProductionOrder, PurchaseOrder, Quote,
+    Supplier, TrackingRecord,
+)
 from sandbox import db
 
 @asynccontextmanager
@@ -72,3 +78,290 @@ def get_component(component_id: str) -> Component:
         raise HTTPException(status_code=404,
                             detail=f"unknown component: {component_id}")
     return _component(row)
+
+
+# ---- row -> contract model ---------------------------------------------
+
+def _supplier(row) -> Supplier:
+    return Supplier(
+        supplier_id=row["supplier_id"], supplier_name=row["supplier_name"],
+        component_id=row["component_id"], unit_price=row["unit_price"],
+        lead_time_days=row["lead_time_days"],
+        available_quantity=row["available_quantity"],
+        quality_score=row["quality_score"],
+        reliability_score=row["reliability_score"],
+        min_order_quantity=row["min_order_quantity"],
+        certifications=json.loads(row["certifications"]),
+    )
+
+
+def _purchase_order(row) -> PurchaseOrder:
+    return PurchaseOrder(**{k: row[k] for k in (
+        "po_id", "component_id", "supplier_id", "quantity", "expected_delivery",
+        "status", "unit_price", "total_value", "approval_required_above")})
+
+
+def _production_order(row) -> ProductionOrder:
+    return ProductionOrder(**{k: row[k] for k in (
+        "production_order_id", "product", "required_component", "units_planned",
+        "component_required_per_unit", "deadline", "priority", "max_delay_days")})
+
+
+def _message(row) -> Message:
+    return Message(**{k: row[k] for k in (
+        "message_id", "sender", "recipient", "subject", "body", "related_po_id",
+        "ts")})
+
+
+# ---- request bodies ----------------------------------------------------
+# Response shapes are frozen in contracts/; request shapes are the sandbox's
+# own business and live here.
+
+class MessageRequest(BaseModel):
+    subject: str
+    body: str
+
+
+class RfqRequest(BaseModel):
+    component_id: str
+    quantity: int
+    needed_by_days: int
+    supplier_ids: list[str]
+
+
+class ApprovalRequest(BaseModel):
+    action: str
+    estimated_cost: float
+
+
+class ErpRequest(BaseModel):
+    action: str
+    payload: dict
+
+
+# ---- T-02 purchase orders ----------------------------------------------
+
+@app.get("/purchase-orders", response_model=list[PurchaseOrder])
+def get_purchase_orders() -> list[PurchaseOrder]:
+    with db.connect() as conn:
+        rows = conn.execute("SELECT * FROM purchase_orders ORDER BY po_id").fetchall()
+    return [_purchase_order(r) for r in rows]
+
+
+@app.get("/purchase-orders/{po_id}", response_model=PurchaseOrder)
+def get_purchase_order(po_id: str) -> PurchaseOrder:
+    with db.connect() as conn:
+        row = conn.execute("SELECT * FROM purchase_orders WHERE po_id = ?",
+                           (po_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown purchase order: {po_id}")
+    return _purchase_order(row)
+
+
+# ---- T-03 supplier catalog ---------------------------------------------
+
+@app.get("/suppliers", response_model=list[Supplier])
+def get_suppliers(component_id: str = Query(..., description="required")) -> list[Supplier]:
+    """§4.6: the query param is required. A catalog read without a component
+    is a bug in the caller, not a request for every supplier we have."""
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM suppliers WHERE component_id = ? ORDER BY supplier_id",
+            (component_id,)).fetchall()
+    return [_supplier(r) for r in rows]
+
+
+# ---- T-04 production schedule ------------------------------------------
+
+@app.get("/production-schedule", response_model=list[ProductionOrder])
+def get_production_schedule() -> list[ProductionOrder]:
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM production_orders ORDER BY deadline, production_order_id"
+        ).fetchall()
+    return [_production_order(r) for r in rows]
+
+
+# ---- T-10 tracking, the ground truth against supplier claims ------------
+
+@app.get("/tracking/{po_id}", response_model=TrackingRecord)
+def get_tracking(po_id: str) -> TrackingRecord:
+    with db.connect() as conn:
+        row = conn.execute("SELECT * FROM tracking WHERE po_id = ?",
+                           (po_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"no tracking record: {po_id}")
+    return TrackingRecord(po_id=row["po_id"], supplier_claim=row["supplier_claim"],
+                          tracking_status=row["tracking_status"],
+                          last_movement=row["last_movement"])
+
+
+# ---- T-05 simulated inbox ----------------------------------------------
+
+@app.get("/inbox", response_model=list[Message])
+def get_inbox(since: datetime | None = None) -> list[Message]:
+    """A queued persona reply stays invisible until its visible_at tick, so a
+    follow-up and its answer can never be read in the same call."""
+    now = db.sim_now().isoformat()
+    sql = "SELECT * FROM messages WHERE visible_at <= ?"
+    args: list = [now]
+    if since is not None:
+        sql += " AND ts > ?"
+        args.append(since.isoformat())
+    with db.connect() as conn:
+        rows = conn.execute(sql + " ORDER BY ts, message_id", args).fetchall()
+    return [_message(r) for r in rows]
+
+
+# ---- T-06 supplier communication ---------------------------------------
+
+@app.post("/suppliers/{supplier_id}/message", response_model=Message)
+def send_message(supplier_id: str, req: MessageRequest) -> Message:
+    """Record the outbound message and queue the persona's reply.
+
+    Goes to a SQLite table. There is no SMTP client, no IMAP client and no
+    mail library anywhere in this repo (PS §18).
+    """
+    with db.connect() as conn:
+        known = conn.execute("SELECT 1 FROM suppliers WHERE supplier_id = ? LIMIT 1",
+                             (supplier_id,)).fetchone()
+        if known is None:
+            raise HTTPException(status_code=404, detail=f"unknown supplier: {supplier_id}")
+        now = db.sim_now()
+        sent = Message(
+            message_id=_next_message_id(conn),
+            sender="ops@example.com",
+            recipient=_supplier_address(supplier_id),
+            subject=req.subject, body=req.body,
+            related_po_id=_related_po(conn, supplier_id), ts=now,
+        )
+        conn.execute(
+            "INSERT INTO messages (message_id, sender, recipient, subject, body,"
+            " related_po_id, ts, visible_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (sent.message_id, sent.sender, sent.recipient, sent.subject, sent.body,
+             sent.related_po_id, now.isoformat(), now.isoformat()))
+    _queue_reply(supplier_id, req.body)
+    return sent
+
+
+def _queue_reply(supplier_id: str, follow_up_body: str) -> None:
+    """Persona replies land with sandbox/supplier_sim.py (§4.8).
+
+    Wired as a lookup rather than an import so this module stays importable
+    while that file does not exist yet.
+    """
+    try:
+        from sandbox import supplier_sim
+    except ImportError:
+        return
+    supplier_sim.queue_reply(supplier_id, follow_up_body)
+
+
+def _supplier_address(supplier_id: str) -> str:
+    return f"{supplier_id.lower().replace('-', '')}@example.com"
+
+
+def _related_po(conn, supplier_id: str) -> str | None:
+    row = conn.execute(
+        "SELECT po_id FROM purchase_orders WHERE supplier_id = ?"
+        " ORDER BY po_id LIMIT 1", (supplier_id,)).fetchone()
+    return row["po_id"] if row else None
+
+
+def _next_message_id(conn) -> str:
+    n = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+    return f"MSG-{n + 1:04d}"
+
+
+# ---- T-07 RFQ ----------------------------------------------------------
+
+@app.post("/rfq", response_model=list[Quote])
+def request_rfq(req: RfqRequest) -> list[Quote]:
+    """Issued quotes are persisted so quote_valid_hours can actually expire
+    them (G8). Recomputing a fresh quote on every read makes G8 untestable."""
+    now = db.sim_now()
+    quotes: list[Quote] = []
+    with db.connect() as conn:
+        for supplier_id in req.supplier_ids:
+            row = conn.execute(
+                "SELECT * FROM suppliers WHERE supplier_id = ? AND component_id = ?",
+                (supplier_id, req.component_id)).fetchone()
+            if row is None:
+                continue
+            q = Quote(
+                supplier_id=supplier_id, component_id=req.component_id,
+                quantity_available=min(req.quantity, row["available_quantity"]),
+                unit_price=row["unit_price"], delivery_days=row["lead_time_days"],
+                expedite_available=row["lead_time_days"] > 3,
+                expedite_fee=8000.0, quote_valid_hours=6, issued_at=now,
+            )
+            conn.execute(
+                "INSERT INTO quotes (supplier_id, component_id, quantity_available,"
+                " unit_price, delivery_days, expedite_available, expedite_fee,"
+                " quote_valid_hours, issued_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (q.supplier_id, q.component_id, q.quantity_available, q.unit_price,
+                 q.delivery_days, int(q.expedite_available), q.expedite_fee,
+                 q.quote_valid_hours, now.isoformat()))
+            quotes.append(q)
+    return quotes
+
+
+# ---- T-08 approval -----------------------------------------------------
+
+@app.post("/approval/check", response_model=ApprovalResult)
+def check_approval(req: ApprovalRequest) -> ApprovalResult:
+    """PS §5.8, exactly. Strictly greater-than: a plan costing precisely
+    150,000 executes autonomously."""
+    approval_required = req.estimated_cost > APPROVAL_THRESHOLD
+    return ApprovalResult(
+        action=req.action, estimated_cost=req.estimated_cost,
+        approval_required=approval_required,
+        approval_reason=(
+            f"Cost exceeds autonomous purchase threshold of {APPROVAL_THRESHOLD}"
+            if approval_required else None),
+    )
+
+
+# ---- T-09 ERP writes ---------------------------------------------------
+
+ERP_ACTIONS = (                                   # PS §5.9 — these six, no others
+    "mark_po_delayed", "create_alternate_po", "attach_supplier_note",
+    "update_production_risk", "record_escalation", "store_recovery_plan",
+)
+
+
+@app.post("/erp/update")
+def erp_update(req: ErpRequest) -> dict:
+    """Writes to a local SQLite file. No ERP SDK, no external API client.
+
+    Every accepted write appends to erp_log with its full payload and a
+    timestamp, so the demo can prove the writes landed.
+    """
+    if req.action not in ERP_ACTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown action: {req.action}. "
+                   f"PS §5.9 permits only: {', '.join(ERP_ACTIONS)}")
+    now = db.sim_now()
+    with db.connect() as conn:
+        n = conn.execute("SELECT COUNT(*) FROM erp_log").fetchone()[0]
+        record_id = f"ERP-{n + 1:04d}"
+        conn.execute(
+            "INSERT INTO erp_log (record_id, action, payload, ts) VALUES (?, ?, ?, ?)",
+            (record_id, req.action, json.dumps(req.payload), now.isoformat()))
+    return {"status": "ok", "message": f"{req.action} recorded",
+            "record_id": record_id}
+
+
+# ---- simulation control ------------------------------------------------
+
+@app.get("/sim/clock")
+def sim_clock() -> dict:
+    return {"now": db.sim_now().isoformat()}
+
+
+@app.post("/sim/reset")
+def sim_reset() -> dict:
+    """Reseed from scratch. What a rehearsal run calls between takes."""
+    db.init_db(reset=True)
+    return {"status": "ok", "now": db.sim_now().isoformat()}
