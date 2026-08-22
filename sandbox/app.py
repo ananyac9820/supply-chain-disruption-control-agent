@@ -24,7 +24,8 @@ from contracts.models import (
     ApprovalResult, Component, Message, ProductionOrder, PurchaseOrder, Quote,
     Supplier, TrackingRecord,
 )
-from sandbox import db
+from sandbox import chaos, db
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -288,11 +289,14 @@ def request_rfq(req: RfqRequest) -> list[Quote]:
                 (supplier_id, req.component_id)).fetchone()
             if row is None:
                 continue
+            withdrawn = conn.execute(
+                "SELECT 1 FROM sim_flags WHERE key = ?",
+                (f"expedite_withdrawn:{req.component_id}",)).fetchone() is not None
             q = Quote(
                 supplier_id=supplier_id, component_id=req.component_id,
                 quantity_available=min(req.quantity, row["available_quantity"]),
                 unit_price=row["unit_price"], delivery_days=row["lead_time_days"],
-                expedite_available=row["lead_time_days"] > 3,
+                expedite_available=row["lead_time_days"] > 3 and not withdrawn,
                 expedite_fee=8000.0, quote_valid_hours=6, issued_at=now,
             )
             conn.execute(
@@ -365,3 +369,6 @@ def sim_reset() -> dict:
     """Reseed from scratch. What a rehearsal run calls between takes."""
     db.init_db(reset=True)
     return {"status": "ok", "now": db.sim_now().isoformat()}
+
+
+app.include_router(chaos.router)

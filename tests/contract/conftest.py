@@ -58,6 +58,19 @@ def live_sandbox() -> str:
     thread.join(timeout=5)
 
 
+@pytest.fixture(autouse=True)
+def fresh_world():
+    """Reseed before every test.
+
+    The chaos injector mutates real state — that is the point of it — and the
+    sandbox outlives any single test, so without this the suite passes or
+    fails depending on the order pytest happens to pick. StubSandbox is built
+    fresh per test anyway; this puts the live sandbox on the same footing.
+    """
+    db.init_db(reset=True)
+    yield
+
+
 @pytest.fixture(params=["stub", "http"])
 def sandbox(request, live_sandbox):
     """The same suite, twice. Any divergence is a merge failure found early."""

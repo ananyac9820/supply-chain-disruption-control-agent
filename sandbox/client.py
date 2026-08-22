@@ -118,6 +118,12 @@ class HttpSandbox:
     def sim_reset(self) -> dict:
         return self._post("/sim/reset", {})
 
+    def sim_inject(self, event: str, params: dict | None = None) -> dict:
+        return self._post("/sim/inject", {"event": event, "params": params or {}})
+
+    def sim_inject_sequence(self, steps: list[dict]) -> list[dict]:
+        return self._post("/sim/inject/sequence", {"steps": steps})
+
     # ---- transport -----------------------------------------------------
 
     def _get(self, path: str, params: dict[str, str] | None = None) -> Any:

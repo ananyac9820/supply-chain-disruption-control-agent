@@ -129,6 +129,11 @@ CREATE TABLE IF NOT EXISTS sim_clock (             -- ADD §4.6 GET /sim/clock
     now TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS sim_flags (            -- ADD, chaos side-effects
+    key   TEXT PRIMARY KEY,                         -- e.g. 'expedite_withdrawn'
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS chaos_log (             -- ADD §4.8 POST /sim/inject
     disruption_id TEXT PRIMARY KEY,
     event         TEXT NOT NULL,
@@ -139,7 +144,7 @@ CREATE TABLE IF NOT EXISTS chaos_log (             -- ADD §4.8 POST /sim/inject
 
 TABLES = ("components", "suppliers", "purchase_orders", "production_orders",
           "messages", "tracking", "quotes", "erp_log", "supplier_trust",
-          "sim_clock", "chaos_log")
+          "sim_clock", "sim_flags", "chaos_log")
 
 
 def connect() -> sqlite3.Connection:
@@ -201,3 +206,15 @@ def sim_now() -> datetime:
     with connect() as conn:
         row = conn.execute("SELECT now FROM sim_clock WHERE id = 1").fetchone()
     return datetime.fromisoformat(row["now"]) if row else SIM_EPOCH
+
+
+def advance_clock(delta) -> datetime:
+    """Move the simulated clock forward and return the new time.
+
+    Sending a supplier a message advances it by one tick, which is what makes
+    "the reply arrives on the next tick" mean something without a scheduler.
+    """
+    now = sim_now() + delta
+    with connect() as conn:
+        conn.execute("UPDATE sim_clock SET now = ? WHERE id = 1", (now.isoformat(),))
+    return now
