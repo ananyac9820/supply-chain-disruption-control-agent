@@ -56,10 +56,28 @@ tests/contract/ passes against both HttpSandbox and StubSandbox.
 
 # Track B — Person B
 
-PLACEHOLDER. Person B must paste their section here from §8.3 of the
-Track B build document, before the hour-1.5 freeze. Do not write it for
-them and do not guess at its hard rules — the Track B document is the
-authority for this section.
+## Hard rules
+- The LLM never does arithmetic that affects a decision. Coverage days,
+  order splits, reschedule days, cost totals and threshold comparisons
+  are computed by deterministic code or by solve(). The model classifies,
+  selects tools, and writes explanations. That is all.
+- Never call the sandbox client directly. Every call goes through
+  agent/tools.py so it is metered and logged.
+- Every tool call requires a non-empty `necessity` string. No defaults.
+- If validate() vetoes a plan, re-solve. The model does not override the
+  validator. Maximum two rounds, then escalate.
+- Always compute coverage from usable_stock, never current_stock.
+- Do not implement or modify solve() or the G1-G12 rules. Call them.
 
-Until it is filled in, the ownership block above still applies: a session
-working with Person B writes only agent/ and output/.
+## Domain
+This is a PROCUREMENT and MANUFACTURING simulation: components,
+suppliers, purchase orders, RFQs, production orders, certifications,
+minimum order quantities, safety stock, approval thresholds.
+It is NOT logistics routing. There are no ports, carriers, transport
+modes, routes, shipping lanes or SLAs anywhere in this project.
+If you find yourself writing about a route or a carrier, stop.
+
+## Definition of done
+A full run completes against StubSandbox, interrupt()/resume preserves
+state["quotes"] across the pause, and a broken assumption routes back to
+node 3 before any LLM output.
