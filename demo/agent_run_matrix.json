@@ -250,7 +250,7 @@
     "status": "INFEASIBLE",
     "relaxation": null,
     "cost": 0.0,
-    "binding": "available_quantity",
+    "binding": "deadline",
     "fired": [
       "G12",
       "G5"

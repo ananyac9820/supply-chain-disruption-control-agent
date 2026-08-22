@@ -35,16 +35,16 @@ EVENTS = [f"H-{n:02d}" for n in range(1, 11)]
 
 # Person A's deterministic-harness table, from demo/HIDDEN_TEST_RESULTS.md.
 REFERENCE = {
-    "H-01": ("OPTIMAL", "reschedule", 152010.0, ["G2"]),
-    "H-02": ("OPTIMAL", "reschedule", 152010.0, ["G2"]),
-    "H-03": ("OPTIMAL", "reschedule", 152010.0, ["G2"]),
-    "H-04": ("OPTIMAL", "reschedule", 152010.0, ["G2"]),
-    "H-05": ("OPTIMAL", "reschedule", 152010.0, ["G2"]),
-    "H-06": ("OPTIMAL", "reschedule", 152010.0, ["G2"]),
-    "H-07": ("OPTIMAL", "reschedule", 152010.0, ["G2"]),
-    "H-08": ("OPTIMAL", "reschedule", 152010.0, ["G2"]),
-    "H-09": ("OPTIMAL", "reschedule", 212814.0, ["G2"]),
-    "H-10": ("INFEASIBLE", None, 0.0, ["G12"]),
+    "H-01": ("OPTIMAL", "reschedule", 152010.0, ["G2"], None),
+    "H-02": ("OPTIMAL", "reschedule", 152010.0, ["G2"], None),
+    "H-03": ("OPTIMAL", "reschedule", 152010.0, ["G2"], None),
+    "H-04": ("OPTIMAL", "reschedule", 152010.0, ["G2"], None),
+    "H-05": ("OPTIMAL", "reschedule", 152010.0, ["G2"], None),
+    "H-06": ("OPTIMAL", "reschedule", 152010.0, ["G2"], None),
+    "H-07": ("OPTIMAL", "reschedule", 152010.0, ["G2"], None),
+    "H-08": ("OPTIMAL", "reschedule", 152010.0, ["G2"], None),
+    "H-09": ("OPTIMAL", "reschedule", 212814.0, ["G2"], None),
+    "H-10": ("INFEASIBLE", None, 0.0, ["G12", "G5"], "deadline"),
 }
 
 
@@ -127,7 +127,7 @@ def compare(row: dict) -> tuple[bool, str]:
     ref = REFERENCE[row["event"]]
     if row.get("error"):
         return False, "run raised"
-    ref_status, ref_relax, ref_cost, ref_fired = ref
+    ref_status, ref_relax, ref_cost, ref_fired, ref_binding = ref
     notes = []
     if row["status"] != ref_status:
         notes.append(f"status {row['status']} vs {ref_status}")
@@ -135,8 +135,10 @@ def compare(row: dict) -> tuple[bool, str]:
         notes.append(f"rung {row['relaxation']} vs {ref_relax}")
     if round(row["cost"] or 0.0, 2) != ref_cost:
         notes.append(f"cost {row['cost']:,.0f} vs {ref_cost:,.0f}")
-    if row["fired"] != ref_fired:
-        notes.append(f"guardrails {row['fired']} vs {ref_fired}")
+    if row["fired"] != sorted(ref_fired):
+        notes.append(f"guardrails {row['fired']} vs {sorted(ref_fired)}")
+    if row["binding"] != ref_binding:
+        notes.append(f"binding {row['binding']} vs {ref_binding}")
     return (not notes), "; ".join(notes)
 
 
@@ -151,7 +153,7 @@ def main() -> int:
         server.should_exit = True
 
     print(f"{'event':<7}{'status':<12}{'rung':<12}{'cost':>12}  "
-          f"{'guardrails':<10}{'tools':>6}{'pause':>7}  match")
+          f"{'guardrails':<10}{'binding':<20}{'tools':>6}  match")
     divergences = []
     for row in rows:
         if row.get("error"):
@@ -161,7 +163,7 @@ def main() -> int:
         ok, note = compare(row)
         print(f"{row['event']:<7}{str(row['status']):<12}{str(row['relaxation']):<12}"
               f"{row['cost']:>12,.0f}  {','.join(row['fired']) or '-':<10}"
-              f"{row['tools_called']:>6}{str(row['paused']):>7}  "
+              f"{str(row['binding'] or '-'):<20}{row['tools_called']:>6}  "
               f"{'yes' if ok else 'NO — ' + note}")
         if not ok:
             divergences.append((row["event"], note, None))

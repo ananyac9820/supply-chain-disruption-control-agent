@@ -22,7 +22,7 @@ a hidden test that will silently pass for the wrong reason.
 | H-07 | expedite becomes unavailable | quotes | OPTIMAL · reschedule · 152,010 | no | G2 |
 | H-08 | supplier claims dispatch, tracking does not support it | inbox, quotes | OPTIMAL · reschedule · 152,010 | no | G2 |
 | H-09 | purchase exceeds approval limit | suppliers, quotes | OPTIMAL · reschedule · 212,814 | yes | G2 |
-| H-10 | production priority changes mid-simulation | production, quotes | INFEASIBLE (deadline) | yes | G12 |
+| H-10 | production priority changes mid-simulation | production, quotes | INFEASIBLE (deadline) | yes | G5, G12 |
 
 ## Cascades
 

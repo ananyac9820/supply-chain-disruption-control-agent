@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import traceback
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -25,7 +26,10 @@ from contracts.constants import APPROVAL_THRESHOLD, EMERGENCY_BUDGET
 from guardrails.validator import validate
 from sandbox.client import HttpSandbox
 from solver import solve
-from solver.build import build_solver_input, unconfirmed_shipment_suppliers
+from agent.solver_input import validator_context
+from solver.build import (baseline, build_solver_input,
+                          unconfirmed_shipment_suppliers)
+from trust import shipment_confidence
 
 EVENTS = [f"H-{n:02d}" for n in range(1, 11)]
 
@@ -86,18 +90,56 @@ def unconfirmed_suppliers(world: HttpSandbox) -> set[str]:
 
 
 def evaluate(world: HttpSandbox) -> dict:
-    """Solve and validate exactly as the demo path does."""
+    """Solve and validate exactly as the agent does.
+
+    The context passed to validate() is built by agent.solver_input.
+    validator_context — the same function the plan node calls. An earlier
+    version of this harness passed only approval_limit and remaining_budget,
+    and since a rule whose inputs are absent does not fire, it silently could
+    not report G5 on any row. That made this file disagree with the agent, and
+    this file is a submission artifact.
+    """
     unconfirmed = unconfirmed_suppliers(world)
-    rung1 = solve(build_solver_input(
+    rung1_input = build_solver_input(
         world, "COMP-104", budget_cap=EMERGENCY_BUDGET,
-        contradicted=unconfirmed, allow_reschedule=False))
-    full = solve(build_solver_input(
+        contradicted=unconfirmed, allow_reschedule=False)
+    full_input = build_solver_input(
         world, "COMP-104", budget_cap=EMERGENCY_BUDGET,
-        contradicted=unconfirmed, allow_reschedule=True))
-    verdict = validate(full, {"approval_limit": float(APPROVAL_THRESHOLD),
-                              "remaining_budget": float(EMERGENCY_BUDGET)})
+        contradicted=unconfirmed, allow_reschedule=True)
+    rung1 = solve(rung1_input)
+    full = solve(full_input)
+
+    claims = [{"supplier_id": supplier_id,
+               "shipment_confidence": _confidence_for(world, supplier_id)}
+              for supplier_id in sorted(unconfirmed)]
+    verdict = validate(full, validator_context(
+        full_input, full, quotes=[], claims=claims,
+        now=datetime.fromisoformat(world.sim_clock()["now"]),
+        affected_priorities=_affected_priorities(world, full)))
     return {"rung1": rung1, "full": full, "verdict": verdict,
             "unconfirmed": sorted(unconfirmed)}
+
+
+def _confidence_for(world: HttpSandbox, supplier_id: str) -> float:
+    """The lowest shipment confidence across that supplier's open POs."""
+    scores = [shipment_confidence(po.po_id) for po in world.get_purchase_orders()
+              if po.supplier_id == supplier_id]
+    return min(scores, default=1.0)
+
+
+def _affected_priorities(world: HttpSandbox, plan) -> list[str]:
+    """Priorities of the orders this plan touches, for G5.
+
+    Mirrors agent.nodes.plan._affected_priorities, including its default of
+    "high" for an order we cannot identify: guessing low would suppress the
+    escalation G5 exists to force.
+    """
+    orders = {p.production_order_id: p.priority
+              for p in world.get_production_schedule()}
+    base = baseline(world, "COMP-104")
+    touched = set(base.get("deadline_misses") or []) | {
+        r.production_order_id for r in plan.reschedules}
+    return sorted({orders.get(pid, "high") for pid in touched}) or ["high"]
 
 
 def run_case(world: HttpSandbox, events: list[str]) -> dict:
@@ -169,10 +211,10 @@ def main() -> int:
         if case.get("error"):
             print(f"{label}  CRASHED")
             continue
-        print(f"{label}  changed={','.join(case['changed']) or 'NOTHING'}"
-              f"  plan={describe(case['result']['full'])}"
-              f"  moved={case['plan_changed']}"
-              f"  fired={case['result']['verdict'].fired or '-'}")
+        full = case["result"]["full"]
+        print(f"{label}  plan={describe(full):<34}"
+              f"  binding={str(full.binding_constraint or '-'):<20}"
+              f"  fired={','.join(case['result']['verdict'].fired) or '-'}")
     for case, note in cascades:
         print(f"{'+'.join(case['events'])}  plan={describe(case['result']['full'])}"
               f"  fired={case['result']['verdict'].fired or '-'}  ({note})")

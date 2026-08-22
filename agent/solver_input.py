@@ -193,15 +193,22 @@ def build_solver_input(
     eligible: list[SolverSupplier] = []
     rejected: list[dict] = []
 
-    # The latest day any order could still run, allowing for every reschedule
-    # the solver is permitted. A supplier that cannot deliver by then cannot
-    # contribute to any plan, so it is a hard elimination like certification -
-    # and naming it is what shows the brief's first section is a filter and not
-    # a low weighting.
-    horizon = max((days_from(now, o.deadline) + o.max_delay_days
-                   for o in production_orders
-                   if o.required_component == component.component_id),
-                  default=None)
+    # NOT a pre-filter. A supplier whose lead time exceeds every reachable
+    # deadline genuinely cannot contribute to coverage, and eliminating it here
+    # looks like a free simplification. It is not: removing it destroys the
+    # evidence solver._diagnose() needs.
+    #
+    # _diagnose relaxes one constraint family at a time and reports the first
+    # that restores feasibility. Suppliers dropped for lead time are gone
+    # before it runs, so relaxing the deadline restores nothing and the run
+    # reports available_quantity - "we cannot get enough material" - for a
+    # shortage that is purely about timing. On H-10 that turned 4 candidates
+    # into 1 and mislabelled the binding constraint.
+    #
+    # §4.4 is explicit that G3 and G4 are pre-solve filters while G11 is a
+    # model constraint, and the solver already enforces it: units arriving
+    # after an order's deadline are not counted toward that order's coverage.
+    # Enforcing it twice is what broke the diagnosis.
 
     for sup in suppliers:
         if sup.component_id != component.component_id:
@@ -246,10 +253,6 @@ def build_solver_input(
         if not quality_ok:
             failures.append(("G4", f"quality {sup.quality_score:.2f} below floor "
                                    f"{component.min_quality:.2f}"))
-        if horizon is not None and lead > horizon:
-            failures.append(("G11", f"lead time {lead}d cannot meet the latest "
-                                    f"deadline (day {horizon}) even fully "
-                                    f"rescheduled"))
         drop = bool(failures)
 
         # Not eliminations. The supplier remains a candidate on its merits; the
