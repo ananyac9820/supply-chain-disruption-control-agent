@@ -56,14 +56,26 @@ def persona_of(supplier_id: str) -> str:
     return row["persona"] if row else "honest"
 
 
-def reply_body(persona: str, reply_index: int, follow_up: str) -> str:
-    """The persona's next line. reply_index is 1 for the first reply."""
+def reply_body(persona: str, reply_index: int, follow_up: str,
+               has_claimed_dispatch: bool = False) -> str:
+    """The persona's next line.
+
+    reply_index counts this supplier's *own prior persona replies* — not every
+    message bearing its address. A chaos event queues messages from a supplier
+    too, and counting those made the first solicited reply look like a second
+    one, so SUP-21 opened by revising down a dispatch claim it had not yet
+    made. That is incoherent on stage and invisible outside a full run.
+
+    The contradictory persona keys off what it has actually said, which is
+    sturdier than any counter: it revises downward only when challenged *and*
+    it has a dispatch claim on the record to revise.
+    """
     if persona == "contradictory":
         # Claims dispatch, then revises downward when challenged — but never
         # retracts the claim itself. Tracking is what contradicts it.
-        if reply_index == 1 or not is_specific_follow_up(follow_up):
-            return DISPATCH_CLAIM
-        return REVISED_DOWN
+        if has_claimed_dispatch and is_specific_follow_up(follow_up):
+            return REVISED_DOWN
+        return DISPATCH_CLAIM
     if persona == "vague":
         if reply_index > 1 and is_specific_follow_up(follow_up):
             return VAGUE_SPECIFIC
@@ -86,7 +98,12 @@ def queue_reply(supplier_id: str, follow_up_body: str) -> str | None:
         persona = row["persona"]
         sender = f"{supplier_id.lower().replace('-', '')}@example.com"
         prior = conn.execute(
-            "SELECT COUNT(*) FROM messages WHERE sender = ?", (sender,)).fetchone()[0]
+            "SELECT COUNT(*) FROM messages WHERE sender = ? AND persona_reply = 1",
+            (sender,)).fetchone()[0]
+        claimed_dispatch = conn.execute(
+            "SELECT 1 FROM messages WHERE sender = ?"
+            " AND LOWER(body) LIKE '%dispatched%' LIMIT 1",
+            (sender,)).fetchone() is not None
         po = conn.execute(
             "SELECT po_id FROM purchase_orders WHERE supplier_id = ? "
             "ORDER BY po_id LIMIT 1", (supplier_id,)).fetchone()
@@ -94,12 +111,14 @@ def queue_reply(supplier_id: str, follow_up_body: str) -> str | None:
 
     visible_at = db.advance_clock(TICK)
     message_id = f"MSG-{total + 1:04d}"
-    body = reply_body(persona, prior + 1, follow_up_body)
+    body = reply_body(persona, prior + 1, follow_up_body,
+                      has_claimed_dispatch=claimed_dispatch)
 
     with db.connect() as conn:
         conn.execute(
             "INSERT INTO messages (message_id, sender, recipient, subject, body,"
-            " related_po_id, ts, visible_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " related_po_id, ts, visible_at, persona_reply)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)",
             (message_id, sender, "ops@example.com",
              f"Re: {po['po_id'] if po else 'enquiry'} / {supplier_id}", body,
              po["po_id"] if po else None,

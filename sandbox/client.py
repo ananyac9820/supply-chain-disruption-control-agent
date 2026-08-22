@@ -73,6 +73,16 @@ class HttpSandbox:
         return [Supplier.model_validate(r)
                 for r in self._get("/suppliers", {"component_id": component_id})]
 
+    def get_suppliers_with_trust(self, component_id: str) -> list[dict]:
+        """Catalog rows plus effective_reliability.
+
+        Not part of the frozen SandboxClient protocol — get_suppliers returns
+        plain Supplier objects so stub and live sandbox stay interchangeable.
+        This is the extra view, returned as dicts so no shape outside
+        contracts/ has to be invented for it.
+        """
+        return self._get("/suppliers", {"component_id": component_id})
+
     def get_production_schedule(self) -> list[ProductionOrder]:
         return [ProductionOrder.model_validate(r)
                 for r in self._get("/production-schedule")]

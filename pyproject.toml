@@ -16,6 +16,13 @@ dynamic = ["dependencies"]
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }
 
+# trust.py is a top-level module, not a package, so packages.find does not see
+# it. Without this line `import trust` works from the repo root (cwd is on the
+# path) and fails everywhere else — the kind of gap that only shows up when
+# someone runs from a different directory.
+[tool.setuptools]
+py-modules = ["trust"]
+
 [tool.setuptools.packages.find]
 # Folders that do not exist yet are simply not found. No entry needs adding
 # when sandbox/, guardrails/, agent/ or output/ appear.

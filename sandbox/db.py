@@ -85,7 +85,10 @@ CREATE TABLE IF NOT EXISTS messages (              -- PS §5.5 / §5.6
     related_po_id TEXT,
     ts            TEXT NOT NULL,
     -- ADD: a queued persona reply is invisible to /inbox until its tick.
-    visible_at    TEXT NOT NULL
+    visible_at    TEXT NOT NULL,
+    -- ADD: 1 only for replies supplier_sim generated. Chaos-injected and
+    -- seeded messages are 0, so they cannot be counted as prior replies.
+    persona_reply INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS tracking (              -- PS §5.10, ground truth

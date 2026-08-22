@@ -25,6 +25,7 @@ from contracts.models import (
     Supplier, TrackingRecord,
 )
 from sandbox import chaos, db
+from trust import TrustEvent, effective_reliability, trust_write
 
 
 @asynccontextmanager
@@ -118,9 +119,26 @@ def _message(row) -> Message:
 # Response shapes are frozen in contracts/; request shapes are the sandbox's
 # own business and live here.
 
+class SupplierView(Supplier):
+    """Supplier, plus what the trust ledger has learned about it.
+
+    A subclass, not an edit: every field of the frozen Supplier is present
+    with the same name and the same meaning, and effective_reliability is
+    added alongside reliability_score rather than replacing it. A caller sees
+    both the catalog's opinion and ours, and can say which is which.
+
+    contracts/models.py is not touched. HttpSandbox.get_suppliers still
+    returns plain Supplier objects so the frozen SandboxClient protocol and
+    stub/http parity both hold; get_suppliers_with_trust returns this.
+    """
+
+    effective_reliability: float
+
+
 class MessageRequest(BaseModel):
     subject: str
     body: str
+    trust_event: TrustEvent | None = None
 
 
 class RfqRequest(BaseModel):
@@ -161,15 +179,24 @@ def get_purchase_order(po_id: str) -> PurchaseOrder:
 
 # ---- T-03 supplier catalog ---------------------------------------------
 
-@app.get("/suppliers", response_model=list[Supplier])
-def get_suppliers(component_id: str = Query(..., description="required")) -> list[Supplier]:
+@app.get("/suppliers", response_model=list[SupplierView])
+def get_suppliers(component_id: str = Query(..., description="required")) -> list[SupplierView]:
     """§4.6: the query param is required. A catalog read without a component
-    is a bug in the caller, not a request for every supplier we have."""
+    is a bug in the caller, not a request for every supplier we have.
+
+    Each row carries effective_reliability alongside the catalog's
+    reliability_score. Nothing existing is renamed or removed.
+    """
     with db.connect() as conn:
         rows = conn.execute(
             "SELECT * FROM suppliers WHERE component_id = ? ORDER BY supplier_id",
             (component_id,)).fetchall()
-    return [_supplier(r) for r in rows]
+    return [
+        SupplierView(**_supplier(r).model_dump(),
+                     effective_reliability=effective_reliability(
+                         r["supplier_id"], r["reliability_score"]))
+        for r in rows
+    ]
 
 
 # ---- T-04 production schedule ------------------------------------------
@@ -192,9 +219,41 @@ def get_tracking(po_id: str) -> TrackingRecord:
                            (po_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail=f"no tracking record: {po_id}")
+    _record_contradiction(po_id, row)
     return TrackingRecord(po_id=row["po_id"], supplier_claim=row["supplier_claim"],
                           tracking_status=row["tracking_status"],
                           last_movement=row["last_movement"])
+
+
+CONTRADICTING_STATUSES = ("label_created_no_pickup", "not_found", "no_movement")
+
+
+def _record_contradiction(po_id: str, row) -> None:
+    """A dispatch claim against tracking that shows nothing moved is a
+    contradiction, and the ledger should know without being asked twice.
+
+    Written at most once per (po_id, claim). A read endpoint that compounds a
+    penalty every time it is polled would make the trust score a function of
+    how often the agent looked, and D-3's read cache would then change the
+    answer rather than just save a call.
+    """
+    if row["supplier_claim"] != "dispatched":
+        return
+    if row["tracking_status"] not in CONTRADICTING_STATUSES:
+        return
+    marker = f"trust_recorded:contradiction:{po_id}"
+    with db.connect() as conn:
+        already = conn.execute("SELECT 1 FROM sim_flags WHERE key = ?",
+                               (marker,)).fetchone()
+        if already:
+            return
+        supplier = conn.execute(
+            "SELECT supplier_id FROM purchase_orders WHERE po_id = ?",
+            (po_id,)).fetchone()
+        if supplier is None:
+            return
+        conn.execute("INSERT INTO sim_flags (key, value) VALUES (?, '1')", (marker,))
+    trust_write(supplier["supplier_id"], "contradicted_claim")
 
 
 # ---- T-05 simulated inbox ----------------------------------------------
@@ -242,7 +301,31 @@ def send_message(supplier_id: str, req: MessageRequest) -> Message:
             (sent.message_id, sent.sender, sent.recipient, sent.subject, sent.body,
              sent.related_po_id, now.isoformat(), now.isoformat()))
     _queue_reply(supplier_id, req.body)
+    if req.trust_event is not None:
+        # The caller observed something and says so explicitly. The sandbox
+        # does not infer trust events from message traffic: the ledger is the
+        # agent's memory, and a world that writes it behind the agent's back
+        # makes the audit trail unexplainable.
+        trust_write(supplier_id, req.trust_event)
+    _record_reply_delay(supplier_id)
     return sent
+
+
+def _record_reply_delay(supplier_id: str) -> None:
+    """A reply that announces a delay is a late event, recorded once per reply."""
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT message_id, body FROM messages WHERE sender = ?"
+            " AND persona_reply = 1 ORDER BY message_id DESC LIMIT 1",
+            (f"{supplier_id.lower().replace('-', '')}@example.com",)).fetchone()
+        if row is None or "delay" not in row["body"].lower():
+            return
+        marker = f"trust_recorded:late:{row['message_id']}"
+        if conn.execute("SELECT 1 FROM sim_flags WHERE key = ?",
+                        (marker,)).fetchone():
+            return
+        conn.execute("INSERT INTO sim_flags (key, value) VALUES (?, '1')", (marker,))
+    trust_write(supplier_id, "late")
 
 
 def _queue_reply(supplier_id: str, follow_up_body: str) -> None:
