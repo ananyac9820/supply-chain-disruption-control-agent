@@ -1,0 +1,13 @@
+[
+  {
+    "po_id": "PO-7712",
+    "component_id": "COMP-104",
+    "supplier_id": "SUP-21",
+    "quantity": 600,
+    "expected_delivery": "2026-09-03",
+    "status": "delayed",
+    "unit_price": 118.0,
+    "total_value": 70800.0,
+    "approval_required_above": 150000.0
+  }
+]
