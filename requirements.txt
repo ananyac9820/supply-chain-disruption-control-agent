@@ -8,3 +8,5 @@ pytest>=8.2
 # Track B only. Track A never imports these.
 langgraph>=0.2
 langchain-core>=0.3
+anthropic>=0.40         # Track B — agent/ LLM calls
+rich>=13.0              # Track B — output/ CLI streaming trace
