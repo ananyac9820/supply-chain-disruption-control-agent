@@ -28,7 +28,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from contracts.stub_sandbox import NOW
+from agent import clock
 from output.audit import AuditLog
 
 _LOGS: dict[str, AuditLog] = {}
@@ -86,6 +86,7 @@ def append_event(state, *, type: str, actor: str, summary: str,
 
 
 def _ts() -> datetime:
-    """Simulated clock. The stub sandbox is frozen at NOW so canned records stay
-    deterministic; real wall-clock arrives with HttpSandbox at hour 12."""
-    return NOW
+    """The simulated clock (agent/clock.py), which starts at the sandbox's NOW
+    and advances one tick per metered tool call. Using the sandbox's frozen NOW
+    directly would stamp every event in a run with the same timestamp."""
+    return clock.now()

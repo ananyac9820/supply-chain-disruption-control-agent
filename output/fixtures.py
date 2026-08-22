@@ -116,9 +116,9 @@ def generate(path: str | Path | None = None, disruption_id: str = "DIS-001") -> 
                      "free_of_safety_stock": 240,
                      "cumulative_requirement": [
                          {"production_order_id": "PROD-914", "deadline_day": 2,
-                          "units": 700, "cumulative": 700, "shortfall": 460},
+                          "units": 700, "cumulative": 700, "cumulative_shortfall": 460},
                          {"production_order_id": "PROD-882", "deadline_day": 4,
-                          "units": 700, "cumulative": 1400, "shortfall": 1160},
+                          "units": 700, "cumulative": 1400, "cumulative_shortfall": 1160},
                      ],
                      "at_risk_orders": ["PROD-914", "PROD-882"],
                      "rationale": "coverage is computed from usable_stock 390, not the "

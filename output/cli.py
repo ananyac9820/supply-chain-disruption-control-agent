@@ -131,7 +131,8 @@ class TraceRenderer:
                 yield Text(
                     f"  {row['production_order_id']} day {row['deadline_day']}: "
                     f"{row['units']} units, cumulative {row['cumulative']}, "
-                    f"short {row['shortfall']}", style="dim")
+                    f"short {row.get('cumulative_shortfall', row.get('shortfall'))}",
+                    style="dim")
             base = detail.get("baseline")
             if base:
                 yield Text(

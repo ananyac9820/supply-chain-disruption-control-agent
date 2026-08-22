@@ -31,6 +31,40 @@ from contracts.state import AgentState
 MAX_REPLANS = 3        # §4.5 — an agent that replans forever looks worse
                        # than one that asks for help
 
+# A failed verdict is not the same thing as a veto. Some rules fail a plan for
+# execution but re-solving under them returns the identical plan, so treating
+# them as vetoes burns a correction round for nothing and delays the escalation
+# the rule was asking for.
+#
+#   re-solve helps    G1  over budget      -> solve again under a tighter cap
+#                     G5  safety stock     -> solve again with the reserve held
+#                     G11 arrival past deadline -> solve again for that order
+#
+#   re-solve is futile  G2  cost over 150,000 -> the solver already minimised
+#                           cost; the second solve returns the same number.
+#                           G2 wants a human, not another attempt.
+#                       G12 no feasible plan after the full relaxation ladder
+#                       G10 tool budget exhausted
+#
+# G3, G4, G6 and G7 are pre-solve filters or model constraints and must be
+# impossible to violate rather than checked afterwards, so they should never
+# appear in a post-solve verdict at all.
+#
+# G8 (quote expired) is neither: it needs a fresh RFQ, which is node 3's work,
+# not another solve. Escalating is the safe reading until node 4 lands at hour
+# 10.5 and can route it back to investigation.
+RESOLVABLE = frozenset({"G1", "G5", "G11"})
+ESCALATE_ONLY = frozenset({"G2", "G8", "G10", "G12"})
+
+
+def vetoed(verdict: dict) -> bool:
+    """True only when re-solving could actually change the answer."""
+    if verdict.get("passed", True):
+        return False
+    if verdict.get("forced_escalation"):
+        return False
+    return bool(set(verdict.get("fired") or []) & RESOLVABLE)
+
 
 # --------------------------------------------------------------- routing
 
@@ -42,12 +76,16 @@ def route_after_investigate(state: AgentState) -> str:
 
 
 def route_after_plan(state: AgentState) -> str:
-    """(b) The validator vetoes, the planner re-solves. The LLM does not get
-    to overrule the validator; after MAX_CORRECTION_ROUNDS it escalates."""
+    """(b) The validator vetoes, the planner re-solves. The LLM does not get to
+    overrule the validator; after MAX_CORRECTION_ROUNDS it escalates.
+
+    Branches on vetoed(), not on passed: a G2 or G12 firing fails the plan for
+    execution but re-solving under it is futile, so it goes straight to the
+    gate with both correction rounds still unspent."""
     verdicts = state.get("guardrail_verdicts") or []
     latest = verdicts[-1] if verdicts else {}
-    if latest.get("passed", True):
-        return "gate"
+    if not vetoed(latest):
+        return "gate"                       # passed, or failed unresolvably
     rounds = int((state.get("plan") or {}).get("correction_rounds", 0))
     if rounds < MAX_CORRECTION_ROUNDS:
         return "plan"                       # re-solve under the veto reason
