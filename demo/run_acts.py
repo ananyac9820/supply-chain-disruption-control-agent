@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Acts 1-3 against the sandbox and solver directly, as a repeatable harness.
+"""Acts 1-3 against the sandbox and solver directly — the demo harness.
+
+The only one. An earlier second harness (run_demo.py) was folded in here and
+deleted: it had drifted behind this one, and a superseded harness that still
+encodes a rejected behaviour is worse than no harness if someone opens it
+during judging.
 
 Person B wires the agent in after the merge. For now this proves the *world*
 behaves correctly in sequence — the class of bug that unit tests cannot see,
@@ -113,6 +118,19 @@ def act_one(world: HttpSandbox) -> None:
          f" · {base['production_days_lost']} production days"
          f" · misses {', '.join(base['deadline_misses'])}")
     check("doing nothing misses a deadline", bool(base["deadline_misses"]))
+
+    step("Quote the alternates and solve")
+    world.request_rfq("COMP-104", 700, 4, ["SUP-42", "SUP-37", "SUP-55", "SUP-18"])
+    plan = solve(build_solver_input(world, "COMP-104", budget_cap=EMERGENCY_BUDGET))
+    show_plan(plan)
+    check("a recovery plan exists", plan.status != "INFEASIBLE")
+    check("SUP-18 carries none of it — cheapest and fastest, uncertified",
+          "SUP-18" not in {a.supplier_id for a in plan.allocations})
+
+    step("Write the outcome back to the simulated ERP")
+    result = world.erp_update("mark_po_delayed", {"po_id": "PO-7712"})
+    line(f"erp_update -> {result['status']} {result['record_id']}")
+    check("the ERP write landed", result["status"] == "ok")
 
 
 # ---- Act 2 --------------------------------------------------------------
@@ -259,6 +277,28 @@ def act_three(world: HttpSandbox) -> None:
           "G2" not in trusting_verdict.fired)
     check("G2 fires when they are excluded", "G2" in verified_verdict.fired)
     check("and forces escalation", verified_verdict.forced_escalation)
+
+    step("Coda — H-09 raises the alternates 40% on top of all this")
+    world.sim_inject("H-09")
+    escalated = solve(build_solver_input(
+        world, "COMP-104", budget_cap=EMERGENCY_BUDGET,
+        contradicted=unconfirmed_shipment_suppliers(world), allow_reschedule=True))
+    show_plan(escalated)
+    approval = world.check_approval("create_alternate_po", escalated.total_cost)
+    line(f"{escalated.total_cost:,.2f} against a threshold of "
+         f"{APPROVAL_THRESHOLD:,} -> approval "
+         f"{'required' if approval.approval_required else 'not required'}")
+    line(f"reason: {approval.approval_reason}")
+    check("still feasible once costs rise", escalated.status != "INFEASIBLE")
+    check("/approval/check agrees with the solver",
+          approval.approval_required == escalated.requires_approval)
+
+    step("Record the escalation in the simulated ERP")
+    recorded = world.erp_update("record_escalation", {
+        "component_id": "COMP-104", "total_cost": escalated.total_cost,
+        "reason": approval.approval_reason})
+    line(f"erp_update -> {recorded['status']} {recorded['record_id']}")
+    check("the escalation was recorded", recorded["status"] == "ok")
 
 
 # ---- harness ------------------------------------------------------------

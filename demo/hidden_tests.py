@@ -304,7 +304,38 @@ move the *baseline counterfactual* — coverage drops from 4.33 days to 3.0, and
 the cost of doing nothing rises. A judge asking "what changed?" gets a real
 answer from the brief even though the allocation is identical.
 
-### 5. No guardrail missed a plan it should have caught
+### 5. The Act 3 escalation holds on margin, not by construction
+
+The attribution change stopped reputation moving on the PO-7712 discrepancy,
+so SUP-21 now carries `effective_reliability 0.72` in the counted-units solve
+rather than the 0.57 it used to. The Act 3 delta survived that at exactly
+8,690, but it survived on headroom rather than because anything guarantees it:
+
+| supplier | price | eff.rel | risk-adjusted |
+|---|---|---|---|
+| SUP-21 | 118.0 | 0.72 | **129.2** |
+| SUP-42 | 132.0 | 0.81 | 139.6 |
+| SUP-55 | 126.0 | 0.55 | 144.0 |
+| SUP-37 | 141.0 | 0.88 | 145.8 |
+
+SUP-21 leads SUP-42 by **10.4 per unit** on risk-adjusted cost. That is the
+margin the demo rides on: while SUP-21 stays cheapest adjusted, the
+counted-units plan is 143,320 and the delta against the unconfirmed plan is
+8,690. Reduce the headroom to zero and the counted-units allocation changes,
+the delta changes with it, and Act 3 needs re-narrating.
+
+Two ways it could go:
+
+- **Seed prices move.** Any change to SUP-21's or SUP-42's `unit_price`, or
+  to either reliability score, moves this directly. Re-run the numbers before
+  trusting the script.
+- **Reputation starts moving again.** A penalty above **0.26** flips the
+  ranking (10.4 ÷ W_RISK 40). One SUPPLIER-attributed incident is 0.15 and
+  does not flip it; two, at 0.30, do. So if PO-7712's discrepancy ever
+  becomes attributable — or a second attributed incident lands on SUP-21 —
+  the Act 3 contrast changes.
+
+### 6. No guardrail missed a plan it should have caught
 
 Every feasible plan above 150,000 fired G2. The one INFEASIBLE result (H-10)
 fired G12 with a named binding constraint. No plan reached a verdict of
