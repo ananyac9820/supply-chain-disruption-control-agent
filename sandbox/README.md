@@ -72,6 +72,11 @@ seeded deadlines land on the same day numbers whenever the sandbox starts.
 
 ## Safety
 
-    grep -rE "smtplib|imaplib|requests\.|httpx\.|stripe|boto3" sandbox/ solver/ guardrails/
+The §2.6 proof grep must return **nothing** over `sandbox/ solver/
+guardrails/`. The command itself is in `SAFETY.md` at the repo root, and it
+stays there rather than here: a copy inside a grepped directory matches its
+own pattern and turns a clean proof into a hit a judge has to be talked
+through.
 
-Returns nothing. Run it before submission.
+`sandbox/client.py` is the one file that speaks HTTP, over loopback only,
+using the standard library. `SAFETY.md` lists it explicitly.

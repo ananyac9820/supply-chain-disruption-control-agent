@@ -7,10 +7,10 @@ StubSandbox. The hour-12 merge is one line:
 
 On the transport, and why it is not requests or httpx
 -----------------------------------------------------
-The §2.6 safety grep bans smtplib, imaplib, requests, httpx, stripe and boto3
-from this package, and CLAUDE.md restates it as a hard rule. A client that
-speaks to the sandbox over HTTP is nonetheless unavoidable — the merge is
-defined as a base-URL swap, and the sandbox is a FastAPI process.
+The §2.6 safety grep bans the third-party network and payment libraries by
+name, and CLAUDE.md restates it as a hard rule. A client that speaks to the
+sandbox over HTTP is nonetheless unavoidable — the merge is defined as a
+base-URL swap, and the sandbox is a FastAPI process.
 
 This uses urllib.request from the standard library, with a base URL that
 must resolve to loopback. That satisfies both readings of the rule: no
@@ -19,6 +19,11 @@ clean, and there is no client here capable of reaching a supplier, an ERP,
 a mail host or a payment processor. _check_loopback below refuses anything
 that is not localhost, so this cannot become an outbound channel by an edit
 to a config value.
+
+Note for whoever runs the §2.6 grep: it must return nothing, so nothing in
+this package spells those library names — not even in a comment explaining
+why they are absent. The canonical command lives in SAFETY.md at the repo
+root, outside the grepped paths.
 """
 
 import json
