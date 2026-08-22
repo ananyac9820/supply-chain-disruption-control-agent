@@ -1,0 +1,267 @@
+[
+  {
+    "event": "H-01",
+    "injected": {
+      "po_id": "PO-7712",
+      "expected_delivery": "2026-09-08",
+      "was": "2026-09-03"
+    },
+    "status": "OPTIMAL",
+    "relaxation": "reschedule",
+    "cost": 152010.0,
+    "binding": null,
+    "fired": [
+      "G2"
+    ],
+    "requires_approval": true,
+    "paused": true,
+    "tools_called": 29,
+    "budget_remaining": 2,
+    "erp_writes": 9,
+    "replans": 0,
+    "excluded": [
+      "SUP-21"
+    ],
+    "error": null
+  },
+  {
+    "event": "H-02",
+    "injected": {
+      "component_id": "COMP-104",
+      "current_stock": 800,
+      "usable_stock": 390,
+      "was": {
+        "current_stock": 420,
+        "usable_stock": 390
+      }
+    },
+    "status": "OPTIMAL",
+    "relaxation": "reschedule",
+    "cost": 152010.0,
+    "binding": null,
+    "fired": [
+      "G2"
+    ],
+    "requires_approval": true,
+    "paused": true,
+    "tools_called": 29,
+    "budget_remaining": 2,
+    "erp_writes": 9,
+    "replans": 0,
+    "excluded": [
+      "SUP-21"
+    ],
+    "error": null
+  },
+  {
+    "event": "H-03",
+    "injected": {
+      "supplier_id": "SUP-21",
+      "quality_score": 0.85,
+      "was": 0.91,
+      "min_quality": 0.9
+    },
+    "status": "OPTIMAL",
+    "relaxation": "reschedule",
+    "cost": 152010.0,
+    "binding": null,
+    "fired": [
+      "G2"
+    ],
+    "requires_approval": true,
+    "paused": true,
+    "tools_called": 29,
+    "budget_remaining": 2,
+    "erp_writes": 9,
+    "replans": 0,
+    "excluded": null,
+    "error": null
+  },
+  {
+    "event": "H-04",
+    "injected": {
+      "supplier_id": "SUP-37",
+      "available_quantity": 200,
+      "was": 400
+    },
+    "status": "OPTIMAL",
+    "relaxation": "reschedule",
+    "cost": 152010.0,
+    "binding": null,
+    "fired": [
+      "G2"
+    ],
+    "requires_approval": true,
+    "paused": true,
+    "tools_called": 29,
+    "budget_remaining": 2,
+    "erp_writes": 9,
+    "replans": 0,
+    "excluded": [
+      "SUP-21"
+    ],
+    "error": null
+  },
+  {
+    "event": "H-05",
+    "injected": {
+      "supplier_id": "SUP-18",
+      "lead_time_days": 2,
+      "reliability_score": 0.5,
+      "was": {
+        "lead_time_days": 3,
+        "reliability_score": 0.65
+      }
+    },
+    "status": "OPTIMAL",
+    "relaxation": "reschedule",
+    "cost": 152010.0,
+    "binding": null,
+    "fired": [
+      "G2"
+    ],
+    "requires_approval": true,
+    "paused": true,
+    "tools_called": 29,
+    "budget_remaining": 2,
+    "erp_writes": 9,
+    "replans": 0,
+    "excluded": [
+      "SUP-21"
+    ],
+    "error": null
+  },
+  {
+    "event": "H-06",
+    "injected": {
+      "component_id": "COMP-104",
+      "daily_usage": 130,
+      "was": 90
+    },
+    "status": "OPTIMAL",
+    "relaxation": "reschedule",
+    "cost": 152010.0,
+    "binding": null,
+    "fired": [
+      "G2"
+    ],
+    "requires_approval": true,
+    "paused": true,
+    "tools_called": 29,
+    "budget_remaining": 2,
+    "erp_writes": 9,
+    "replans": 0,
+    "excluded": [
+      "SUP-21"
+    ],
+    "error": null
+  },
+  {
+    "event": "H-07",
+    "injected": {
+      "component_id": "COMP-104",
+      "expedite_available": false
+    },
+    "status": "OPTIMAL",
+    "relaxation": "reschedule",
+    "cost": 152010.0,
+    "binding": null,
+    "fired": [
+      "G2"
+    ],
+    "requires_approval": true,
+    "paused": true,
+    "tools_called": 29,
+    "budget_remaining": 2,
+    "erp_writes": 9,
+    "replans": 0,
+    "excluded": [
+      "SUP-21"
+    ],
+    "error": null
+  },
+  {
+    "event": "H-08",
+    "injected": {
+      "po_id": "PO-7712",
+      "tracking_status": "label_created_no_pickup",
+      "message_id": "MSG-0002"
+    },
+    "status": "OPTIMAL",
+    "relaxation": "reschedule",
+    "cost": 152010.0,
+    "binding": null,
+    "fired": [
+      "G2"
+    ],
+    "requires_approval": true,
+    "paused": true,
+    "tools_called": 30,
+    "budget_remaining": 2,
+    "erp_writes": 10,
+    "replans": 0,
+    "excluded": [
+      "SUP-21"
+    ],
+    "error": null
+  },
+  {
+    "event": "H-09",
+    "injected": {
+      "component_id": "COMP-104",
+      "factor": 1.4,
+      "incumbent_untouched": "SUP-21",
+      "was": {
+        "SUP-42": 132.0,
+        "SUP-37": 141.0,
+        "SUP-18": 104.0,
+        "SUP-55": 126.0
+      }
+    },
+    "status": "OPTIMAL",
+    "relaxation": "reschedule",
+    "cost": 212814.0,
+    "binding": null,
+    "fired": [
+      "G2"
+    ],
+    "requires_approval": true,
+    "paused": true,
+    "tools_called": 29,
+    "budget_remaining": 2,
+    "erp_writes": 9,
+    "replans": 0,
+    "excluded": [
+      "SUP-21"
+    ],
+    "error": null
+  },
+  {
+    "event": "H-10",
+    "injected": {
+      "production_order_id": "PROD-914",
+      "priority": "high",
+      "max_delay_days": 0,
+      "was": {
+        "priority": "low",
+        "max_delay_days": 5
+      }
+    },
+    "status": "INFEASIBLE",
+    "relaxation": null,
+    "cost": 0.0,
+    "binding": "available_quantity",
+    "fired": [
+      "G12",
+      "G5"
+    ],
+    "requires_approval": true,
+    "paused": true,
+    "tools_called": 23,
+    "budget_remaining": 2,
+    "erp_writes": 0,
+    "replans": 0,
+    "excluded": null,
+    "error": null
+  }
+]
