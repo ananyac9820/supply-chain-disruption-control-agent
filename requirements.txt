@@ -1,0 +1,10 @@
+# Shared. Track A needs no LLM SDK and no network library at all.
+pydantic>=2.7
+fastapi>=0.111          # Track A — sandbox/
+uvicorn[standard]>=0.30 # Track A — sandbox/
+ortools>=9.10           # Track A — solver/ (CP-SAT)
+pytest>=8.2
+
+# Track B only. Track A never imports these.
+langgraph>=0.2
+langchain-core>=0.3

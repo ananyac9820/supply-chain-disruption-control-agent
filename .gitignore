@@ -1,0 +1,14 @@
+.env
+.env.*
+*.key
+**/secrets*
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.db
+*.sqlite3
+.langgraph_api/
+audit_logs/
+demo/recordings/
+.DS_Store
