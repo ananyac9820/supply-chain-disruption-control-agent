@@ -363,7 +363,11 @@ def _next_message_id(conn) -> str:
 def request_rfq(req: RfqRequest) -> list[Quote]:
     """Issued quotes are persisted so quote_valid_hours can actually expire
     them (G8). Recomputing a fresh quote on every read makes G8 untestable."""
-    now = db.sim_now()
+    # Issuing quotes takes time, and that time is what a quote expires
+    # against. Without the tick, quote_valid_hours could only ever run down
+    # through message traffic, and an RFQ-only flow would see quotes that
+    # never age.
+    now = db.advance_clock(db.SIM_TICK)
     quotes: list[Quote] = []
     with db.connect() as conn:
         for supplier_id in req.supplier_ids:

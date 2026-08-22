@@ -11,7 +11,7 @@ justified in master plan §8.3 and stays sandbox-internal.
 import json
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 SEED_DIR = Path(__file__).parent / "seed"
@@ -21,6 +21,13 @@ DB_PATH = Path(os.environ.get("SCDA_DB", Path(__file__).parent / "scda.db"))
 # so the fixture deadlines (PROD-914 day 2, PROD-882 day 4) hold no matter
 # when the sandbox is started. Matches contracts/stub_sandbox.NOW.
 SIM_EPOCH = datetime(2026, 9, 2, 10, 0, 0)
+
+# One tick. Sending a supplier a message or issuing an RFQ advances the clock
+# by this much, in both this sandbox and contracts.stub_sandbox.StubSandbox.
+# The two must agree: a quote's freshness is measured against this clock, and
+# if the stub's clock stands still while quotes are stamped from it, every
+# re-quote is born expired and G8 can never be cleared.
+SIM_TICK = timedelta(hours=1)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS components (            -- PS §5.1

@@ -167,3 +167,43 @@ def test_a_clean_plan_passes_with_nothing_fired():
     verdict = validate(plan(100000.0, "SUP-42"), BASE | {
         "remaining_budget": 400000.0, "projected_stock": 200, "safety_stock": 150})
     assert verdict.passed and verdict.fired == [] and not verdict.forced_escalation
+
+
+# ---- what a veto actually asks the caller to do -------------------------
+
+def test_g8_is_resolvable_in_the_loop_not_by_a_human():
+    """vetoed() says recover; it does not say re-solve blindly."""
+    from guardrails.validator import needs_fresh_quote
+
+    context = BASE | {"quotes": [
+        {"supplier_id": "SUP-42", "issued_at": NOW - timedelta(hours=7),
+         "quote_valid_hours": 6}]}
+    verdict = validate(plan(100000.0, "SUP-42"), context)
+
+    assert "G8" in verdict.fired
+    assert vetoed(verdict), "recoverable without a human"
+    assert not verdict.forced_escalation
+    assert needs_fresh_quote(verdict), "and the recovery is a re-RFQ, not a re-solve"
+
+
+@pytest.mark.parametrize("fired_rule,context_extra", [
+    ("G1", {"remaining_budget": 1000.0}),
+    ("G9", {"claims": [{"supplier_id": "SUP-42", "status": "CONTRADICTED"}]}),
+])
+def test_other_vetoes_do_not_ask_for_a_fresh_quote(fired_rule, context_extra):
+    from guardrails.validator import needs_fresh_quote
+
+    verdict = validate(plan(100000.0, "SUP-42"), BASE | context_extra)
+    assert fired_rule in verdict.fired
+    assert vetoed(verdict)
+    assert not needs_fresh_quote(verdict), "a re-solve is the whole recovery here"
+
+
+def test_escalate_only_rules_are_never_vetoes():
+    from guardrails.validator import ESCALATE_ONLY_RULES, needs_fresh_quote
+
+    verdict = validate(plan(200000.0, "SUP-42"), BASE)
+    assert set(verdict.fired) <= ESCALATE_ONLY_RULES
+    assert not vetoed(verdict)
+    assert not needs_fresh_quote(verdict)
+    assert verdict.forced_escalation

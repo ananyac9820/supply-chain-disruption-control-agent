@@ -50,14 +50,48 @@ def validate(plan: SolverOutput, context: dict) -> Verdict:
     )
 
 
-def vetoed(verdict: Verdict) -> bool:
-    """True when node 4 should re-solve rather than escalate.
+# G8 is the one veto whose fix is not a re-solve. An expired quote is stale
+# information, not a bad plan: re-solving the same inputs drops that supplier
+# for the rest of the run (C7 forces y[s] = 0), when the actual remedy is one
+# RFQ away. Track B routes G8 back to node 3 for a fresh quote before
+# re-solving, which is correct and is a refinement of vetoed(), not a
+# disagreement with it.
+REQUOTE_RULES = frozenset({"G8"})
 
-    A verdict can fail without being a veto — G2 and G12 both fail a plan for
-    execution while re-solving is useless. This is the function node 4 should
-    branch on, not `passed`.
+# Rules that fail a plan for execution while re-solving cannot help: an
+# over-threshold plan re-solves to itself, and G12 fires only once the
+# relaxation ladder has already run out.
+ESCALATE_ONLY_RULES = frozenset({"G2", "G12"})
+
+
+def vetoed(verdict: Verdict) -> bool:
+    """True when the plan is recoverable in the loop rather than by a human.
+
+    Branch on this, not on `passed`. A verdict can fail without being a veto:
+    G2 and G12 both fail a plan for execution while re-solving is useless.
+
+    This answers *whether* to recover, not *how*. The recoveries differ:
+
+      G1  re-solve under a tighter cap — same inputs, lower budget
+      G5  re-solve preserving safety stock, or record a justification
+      G9  re-solve without that supplier; its units count as 0 confirmed
+      G8  **fetch a fresh quote first** — see REQUOTE_RULES and
+          needs_fresh_quote(). Re-solving directly is permitted and will
+          terminate, but it discards a supplier that one RFQ would restore.
+
+    A reader who takes "veto means re-solve" literally will implement the
+    lossy path for G8. Check needs_fresh_quote() before re-solving.
     """
-    return bool(set(verdict.fired) - {"G2", "G12"}) and not verdict.passed
+    return bool(set(verdict.fired) - ESCALATE_ONLY_RULES) and not verdict.passed
+
+
+def needs_fresh_quote(verdict: Verdict) -> bool:
+    """True when re-investigation should precede the re-solve.
+
+    Only G8 today. Node 3 re-RFQs the named supplier, then node 4 re-solves
+    with a quote that is no longer stale.
+    """
+    return bool(set(verdict.fired) & REQUOTE_RULES)
 
 
 def unreachable_pre_solve_rules() -> tuple[str, ...]:

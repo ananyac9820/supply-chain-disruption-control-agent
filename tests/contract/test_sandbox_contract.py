@@ -161,3 +161,48 @@ def test_erp_update_rejects_everything_else(sandbox, action):
     result = sandbox.erp_update(action, {})
     assert result["status"] == "rejected"
     assert result["record_id"] is None
+
+
+# ---- the simulated clock, and quote freshness ---------------------------
+
+def test_the_clock_advances_on_a_message_and_on_an_rfq(sandbox):
+    """Both clients tick identically, or quote expiry means different things
+    on either side of the merge."""
+    start = datetime.fromisoformat(sandbox.sim_clock()["now"])
+
+    sandbox.request_rfq("COMP-104", 700, 4, ["SUP-42"])
+    after_rfq = datetime.fromisoformat(sandbox.sim_clock()["now"])
+    assert after_rfq > start, "issuing quotes takes time"
+
+    sandbox.send_message("SUP-42", "status", "Confirm the date?")
+    after_message = datetime.fromisoformat(sandbox.sim_clock()["now"])
+    assert after_message > after_rfq
+
+    assert after_rfq - start == after_message - after_rfq, "one tick is one tick"
+
+
+def test_a_requote_is_issued_fresh_rather_than_born_expired(sandbox):
+    """The re-RFQ recovery path has to be able to close.
+
+    A quote is stamped from the simulated clock and expires against it (G8).
+    If quotes carry a frozen timestamp while the clock moves on, then once
+    the clock passes the validity window every re-quote arrives already
+    expired: G8 fires again, node 3 requests another, and the loop only ends
+    at the replan cap. It terminates safely, which is exactly why it reads as
+    a stub artefact rather than a fault.
+    """
+    first = sandbox.request_rfq("COMP-104", 700, 4, ["SUP-42"])[0]
+
+    # Burn past the validity window through ordinary traffic.
+    for _ in range(first.quote_valid_hours + 1):
+        sandbox.send_message("SUP-42", "status", "Any progress?")
+
+    now = datetime.fromisoformat(sandbox.sim_clock()["now"])
+    stale_by = (now - first.issued_at).total_seconds() / 3600
+    assert stale_by > first.quote_valid_hours, "the first quote should be expired"
+
+    requote = sandbox.request_rfq("COMP-104", 700, 4, ["SUP-42"])[0]
+    now = datetime.fromisoformat(sandbox.sim_clock()["now"])
+    age = (now - requote.issued_at).total_seconds() / 3600
+    assert age <= 0, "a re-quote is issued at the current tick"
+    assert age < requote.quote_valid_hours, "and is therefore not already expired"

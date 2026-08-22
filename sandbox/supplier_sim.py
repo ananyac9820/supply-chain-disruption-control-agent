@@ -20,7 +20,7 @@ from datetime import timedelta
 
 from sandbox import db
 
-TICK = timedelta(hours=1)
+TICK = db.SIM_TICK      # one definition, shared with the stub
 
 HONEST_REPLY = ("Confirmed: {quantity} units, dispatch on 2026-09-04, "
                 "delivery by 2026-09-08.")

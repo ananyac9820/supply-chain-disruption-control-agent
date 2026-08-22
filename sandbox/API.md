@@ -148,10 +148,18 @@ timestamp.
 
 ### `GET /sim/clock` → `{"now": "2026-09-02T10:00:00"}`
 
-The clock starts at `SIM_EPOCH` = 2026-09-02T10:00 and moves for exactly two
-reasons: sending a supplier a message (+1 hour), and a sequence step's
-`delay_minutes`. Seeded deadlines are relative to the epoch, so PROD-914 is
-always day 2 and PROD-882 always day 4.
+The clock starts at `SIM_EPOCH` = 2026-09-02T10:00 and moves for exactly
+three reasons: sending a supplier a message (+1 tick), **issuing an RFQ
+(+1 tick)**, and a sequence step's `delay_minutes`. Seeded deadlines are
+relative to the epoch, so PROD-914 is always day 2 and PROD-882 always day 4.
+
+`StubSandbox` ticks identically, and a test asserts the two agree step for
+step. This matters for G8: quotes are stamped from the clock and expire
+against it, so a stub with a frozen clock stamps every re-quote with the same
+past instant. Once the agent's clock passes the validity window, each
+re-quote is born expired, G8 fires again, and the re-RFQ recovery path can
+never close — terminating safely at the replan cap, which is what makes it
+look like a loop rather than a fault.
 
 ### `POST /sim/reset` → reseeds from scratch, clearing the trust ledger.
 
@@ -235,6 +243,28 @@ elif verdict.forced_escalation:
 over-threshold plan re-solves to itself, and G12 only fires after the ladder
 has already run out. Treating either as a veto burns a correction round for
 nothing. `G1`, `G8`, `G9` and an unjustified `G5` are real vetoes.
+
+**`vetoed()` says whether to recover, not how.** The recoveries differ, and
+G8 is the one that is not a re-solve:
+
+| rule | recovery |
+|---|---|
+| G1 | re-solve under a tighter cap |
+| G5 | re-solve preserving safety stock, or record a justification |
+| G9 | re-solve without that supplier — its units count as 0 confirmed |
+| G8 | **fetch a fresh quote first**, then re-solve |
+
+```python
+if vetoed(verdict):
+    if needs_fresh_quote(verdict):
+        ...   # back to node 3: re-RFQ the named supplier
+    ...       # then re-solve
+```
+
+Re-solving directly on G8 is permitted and terminates, but C7 forces
+`y[s] = 0` for the expired supplier, so it is dropped for the rest of the run
+when one RFQ would have restored it. `REQUOTE_RULES` and
+`ESCALATE_ONLY_RULES` are exported for anyone building their own routing.
 
 ---
 
