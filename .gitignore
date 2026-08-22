@@ -11,6 +11,7 @@ venv/
 .langgraph_api/
 audit_logs/
 demo/recordings/
+demo/credential_run.json
 .DS_Store
 *.egg-info/
 build/
