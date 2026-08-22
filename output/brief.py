@@ -65,6 +65,8 @@ def _actions(state: dict) -> str:
     for call in state.get("tools_called") or []:
         if call.get("served_from_cache"):
             continue                       # a cache hit found nothing new
+        if call.get("phase") == "execution":
+            continue                       # ERP writes have their own section
         lines.append((call.get("endpoint") or call.get("tool"),
                       call.get("necessity", "")))
 

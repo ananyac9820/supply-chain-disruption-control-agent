@@ -56,3 +56,21 @@ def advance(seconds: float = TICK_SECONDS) -> datetime:
 
 def reset(start: datetime | None = None) -> None:
     CLOCK.reset(start)
+
+
+def sync(moment: datetime) -> datetime:
+    """Adopt the sandbox's clock.
+
+    The sandbox is the world, and since it started advancing its own clock on
+    messages and RFQs there must not be a second one. Quotes are stamped from
+    the sandbox's clock and expire against ours, so two clocks drifting apart
+    means G8 fires on the wrong runs - or, worse, never fires because our clock
+    trails and every quote looks eternally fresh. Track B follows.
+
+    Monotonic: a sandbox that somehow reports an earlier time does not rewind
+    the trail, because audit event ids are ordered and timestamps that went
+    backwards would make the file unreadable.
+    """
+    if moment > CLOCK._now:
+        CLOCK._now = moment
+    return CLOCK._now

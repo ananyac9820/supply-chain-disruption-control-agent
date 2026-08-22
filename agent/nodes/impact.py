@@ -62,6 +62,11 @@ def impact(state: AgentState) -> dict:
     # every read of the production schedule, so the map travels from here
     # rather than node 4 reading the schedule again to answer the same question.
     base["priorities"] = {r["production_order_id"]: r["priority"] for r in rows}
+    # The register needs the per-order requirement to spot a demand spike, and
+    # node 2 is the only node that walks the schedule.
+    base["requirement_rows"] = [
+        {k: r[k] for k in ("production_order_id", "priority", "deadline_day",
+                           "units", "cumulative")} for r in rows]
 
     out: dict = {
         "usable_stock": component.usable_stock,

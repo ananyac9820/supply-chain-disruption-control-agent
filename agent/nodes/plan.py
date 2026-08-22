@@ -43,7 +43,8 @@ from agent.audit import append_event
 from agent.integrations import (GUARDRAILS_AVAILABLE, SOLVER_AVAILABLE, solve,
                                 validate)
 from agent.llm import get_llm
-from agent.solver_input import build_solver_input, validator_context
+from agent.solver_input import (apply_commitments, build_solver_input,
+                                commitments_from, validator_context)
 from agent.tools import call_tool
 from contracts.constants import APPROVAL_THRESHOLD
 from contracts.state import AgentState
@@ -90,6 +91,26 @@ def plan(state: AgentState) -> dict:
         quotes=quotes, claims=claims, now=now,
         reserved_budget=float(work.get("reserved_budget") or 0.0))
 
+    # §4.5 replan hygiene: re-solve for the shortfall ONLY. Units already
+    # committed by node 6 stay committed and come off both sides of the
+    # problem - the demand they cover and the supply they consumed.
+    commitments = commitments_from(work.get("erp_writes") or [])
+    if commitments:
+        netted, trimmed = apply_commitments(
+            solver_input.production_orders, solver_input.suppliers, commitments)
+        solver_input = solver_input.model_copy(
+            update={"production_orders": netted, "suppliers": trimmed})
+        work["audit_events"] = append_event(
+            work, type="calculation", actor="planner",
+            summary=(f"re-solving for the shortfall only: "
+                     f"{sum(c['units'] for c in commitments)} units already "
+                     f"committed stay committed"),
+            detail={"commitments": commitments,
+                    "remaining_requirement": [o.model_dump() for o in netted],
+                    "rationale": "tearing up a good purchase order because a "
+                                 "different supplier moved is how a replan costs "
+                                 "more than the disruption did"})
+
     work["audit_events"] = append_event(
         work, type="calculation", actor="planner",
         summary=(f"solver input assembled: {len(solver_input.suppliers)} eligible "
@@ -113,7 +134,10 @@ def plan(state: AgentState) -> dict:
         return _no_solver(work, rejected, rounds)
 
     out = solve(solver_input)
-    counterfactual = _counterfactual(solver_input)
+    # A counterfactual against an infeasible plan compares a cost to
+    # zero and reports a negative saving, which is worse than silence.
+    counterfactual = (_counterfactual(solver_input)
+                      if out.status != "INFEASIBLE" else None)
 
     verdict = _validate(solver_input, out, quotes, claims, now, work)
     new_plan = _as_plan(out, rounds, revising, counterfactual, solver_input)

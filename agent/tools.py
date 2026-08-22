@@ -13,6 +13,7 @@ Both satisfy contracts.stub_sandbox.SandboxClient, so nothing else changes.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from agent import clock
@@ -61,7 +62,8 @@ def endpoint_label(tool_name: str, kwargs: dict) -> str:
     return base
 
 
-def call_tool(state: dict, tool_name: str, necessity: str, **kwargs) -> Any:
+def call_tool(state: dict, tool_name: str, necessity: str,
+              phase: str = "investigation", **kwargs) -> Any:
     """Meter, cache, record and dispatch one sandbox call.
 
     Mutates state["tools_called"] and state["tool_budget_remaining"] in place;
@@ -89,9 +91,9 @@ def call_tool(state: dict, tool_name: str, necessity: str, **kwargs) -> Any:
         return ledger.get(key)
 
     # ---- real call: budget first, so exhaustion fails closed -----------
-    ledger.check_budget(tool_name, necessity)
+    ledger.check_budget(tool_name, necessity, phase)
     result = getattr(SANDBOX, tool_name)(**kwargs)
-    clock.advance()                       # a metered call costs simulated time
+    _advance_clock()
 
     if cacheable:
         ledger.store(key, result)
@@ -100,22 +102,43 @@ def call_tool(state: dict, tool_name: str, necessity: str, **kwargs) -> Any:
         invalidated = ledger.invalidate(INVALIDATES.get(tool_name, frozenset()))
 
     rec = ledger.record(tool_name, hash_args(kwargs), necessity,
-                        served_from_cache=False)
+                        served_from_cache=False, phase=phase)
     _record(state, rec, label, necessity, ledger, cached=False,
-            invalidated=invalidated)
+            invalidated=invalidated, phase=phase)
     return result
 
 
+def _advance_clock() -> None:
+    """Follow the sandbox's clock where there is one, else tick our own.
+
+    HttpSandbox and StubSandbox both expose sim_clock(); a client that does not
+    leaves Track B on its own simulated clock, which is what the pre-merge runs
+    used. Either way there is exactly one time in the trail.
+    """
+    reader = getattr(SANDBOX, "sim_clock", None)
+    if reader is None:
+        clock.advance()
+        return
+    try:
+        clock.sync(datetime.fromisoformat(reader()["now"]))
+    except Exception:                     # noqa: BLE001 - a clock read must
+        clock.advance()                   # never take down a tool call
+
+
 def _record(state: dict, rec, label: str, necessity: str, ledger,
-            *, cached: bool, invalidated: int = 0) -> None:
+            *, cached: bool, invalidated: int = 0,
+            phase: str = "investigation") -> None:
     """Write the call into state and into the audit trail."""
-    entry = rec.as_dict() | {"endpoint": label}
+    entry = rec.as_dict() | {"endpoint": label, "phase": phase}
     state["tools_called"] = list(state.get("tools_called") or []) + [entry]
     state["tool_budget_remaining"] = ledger.remaining
 
     detail = {"endpoint": label, "served_from_cache": cached,
               "budget_used": ledger.used, "budget_total": ledger.budget,
-              "budget_avoided": ledger.avoided, "args_hash": rec.args_hash}
+              "budget_avoided": ledger.avoided, "args_hash": rec.args_hash,
+              "phase": phase}
+    if phase == "execution":
+        detail["execution_writes"] = ledger.execution_used
     if invalidated:
         detail["cache_invalidated"] = invalidated
     state["audit_events"] = append_event(

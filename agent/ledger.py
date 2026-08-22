@@ -88,6 +88,7 @@ class ToolLedger:
     ttl_seconds: int = CACHE_TTL_SIM_SECONDS
     used: int = 0
     avoided: int = 0
+    execution_used: int = 0
     calls: list[ToolCallRecord] = field(default_factory=list)
     _cache: dict[str, _CacheEntry] = field(default_factory=dict)
 
@@ -104,7 +105,24 @@ class ToolLedger:
                 "call must record why it was made")
         return necessity.strip()
 
-    def check_budget(self, tool: str, necessity: str) -> None:
+    def check_budget(self, tool: str, necessity: str, phase: str) -> None:
+        """The budget caps INVESTIGATION, not execution.
+
+        G10's own flag is INCOMPLETE_INVESTIGATION, and §4.2 describes the
+        budget as what stops the planner calling tools it cannot justify. The
+        ERP writes in node 6 are not investigation: they are the consequence of
+        a decision a human may already have approved. Refusing to record an
+        approved decision because the investigation was thorough would be a
+        worse failure than the one the budget exists to prevent - the plan would
+        execute in the world and not in the audit trail.
+
+        So execution writes are still metered, still carry a necessity, and
+        still appear in the ledger and the trail - counted separately, as
+        execution_used, so "11 used / 15 budget / 3 avoided" stays the
+        investigation number a judge is being shown.
+        """
+        if phase == "execution":
+            return
         if self.remaining <= 0:
             raise ToolBudgetExhausted(tool, necessity)
 
@@ -136,9 +154,11 @@ class ToolLedger:
     # ---- recording ---------------------------------------------------
 
     def record(self, tool: str, args_hash: str, necessity: str,
-               served_from_cache: bool) -> ToolCallRecord:
+               served_from_cache: bool, phase: str = "investigation") -> ToolCallRecord:
         if served_from_cache:
             self.avoided += 1
+        elif phase == "execution":
+            self.execution_used += 1
         else:
             self.used += 1
         rec = ToolCallRecord(
@@ -151,7 +171,8 @@ class ToolLedger:
 
     def summary(self) -> dict:
         return {"used": self.used, "budget": self.budget,
-                "avoided": self.avoided, "remaining": self.remaining}
+                "avoided": self.avoided, "remaining": self.remaining,
+                "execution_writes": self.execution_used}
 
 
 _LEDGERS: dict[str, ToolLedger] = {}

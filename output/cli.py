@@ -58,16 +58,32 @@ TYPE_LABELS = {
     "escalation": ("PAUSE", "bold magenta"),
     "erp_update": ("ERP", "green"),
     "replan": ("REPLAN", "bold yellow"),
-    "assumption_break": ("BROKEN", "bold red"),
+    "assumption_break": ("BROKEN", "bold red on default"),
     "run_complete": ("DONE", "bold green"),
 }
 
 CONTINUATION = " " * 10          # width of "[hh:mm:ss] "
 
 
+def _make_console() -> Console:
+    """A console that cannot die on a glyph.
+
+    The assumption-break summary carries a warning sign, and the Windows
+    console is cp1252 by default, which cannot encode it. Losing the single
+    most convincing line of the demo to a UnicodeEncodeError is not a tradeoff
+    worth making, so stdout is pushed to UTF-8 where that is possible and
+    unencodable characters are replaced rather than raised where it is not.
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:                     # noqa: BLE001 - not all streams can
+        pass
+    return Console(highlight=False, soft_wrap=True)
+
+
 class TraceRenderer:
     def __init__(self, console: Console | None = None, speed: float = 0.06) -> None:
-        self.console = console or Console(highlight=False, soft_wrap=True)
+        self.console = console or _make_console()
         self.speed = speed
 
     # ---- one event ---------------------------------------------------
@@ -139,6 +155,37 @@ class TraceRenderer:
                     f"{base['units_short']} units short - "
                     f"{base['production_days_lost']} production-days lost - "
                     f"cost of inaction {base['cost_of_inaction']:,.0f}", style="dim")
+
+        if etype == "assumption_break":
+            # The live demo moment. Person A fires an H-event during Q&A and
+            # this is what appears before the model has produced a token, so it
+            # says which assumption and exactly what moved.
+            for b in detail.get("broken") or []:
+                t = Text()
+                reason = b["reason"]
+                # the trigger name is often the first words of the reason;
+                # printing both reads as a stutter on the demo line
+                if not reason.lower().startswith(b["trigger"].lower()):
+                    t.append(f"{b['trigger']}: ", style="bold yellow")
+                t.append(reason, style="yellow")
+                yield t
+                t2 = Text()
+                t2.append(f"  {b['id']} expected ", style="dim")
+                t2.append(str(b["expected"]), style="dim green")
+                t2.append(" but observed ", style="dim")
+                t2.append(str(b["observed"]), style="dim red")
+                yield t2
+            if detail.get("replan_count") is not None:
+                yield Text(f"replan {detail['replan_count']} of 3 - back to "
+                           f"investigation", style="dim")
+
+        if etype == "erp_update" and detail.get("action"):
+            payload = detail.get("payload") or {}
+            keys = [k for k in ("po_id", "supplier_id", "quantity",
+                                "production_order_id", "plan_id") if k in payload]
+            if keys:
+                yield Text("  " + "  ".join(f"{k}={payload[k]}" for k in keys),
+                           style="dim")
 
         if etype == "verification":
             before, after = detail.get("trust_before"), detail.get("trust_after")

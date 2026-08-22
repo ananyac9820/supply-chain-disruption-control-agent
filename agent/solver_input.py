@@ -29,7 +29,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from agent.impact_math import days_from, units_required
-from agent.integrations import trust_read
+from agent.integrations import reliability_of
 from contracts.constants import (APPROVAL_THRESHOLD, EMERGENCY_BUDGET,
                                  PRIORITY_WEIGHT)
 from contracts.models import (Component, ProductionOrder, SolverInput,
@@ -45,6 +45,81 @@ def quote_expired(quote: dict, now: datetime) -> bool:
     if isinstance(issued, str):
         issued = datetime.fromisoformat(issued)
     return now > issued + timedelta(hours=int(quote.get("quote_valid_hours") or 0))
+
+
+def commitments_from(erp_writes: list[dict]) -> list[dict]:
+    """Units already bought, read back off the ERP writes node 6 made.
+
+    §4.5: on a replan we re-solve for the shortfall ONLY. Units already
+    confirmed from other suppliers stay committed — tearing up a good purchase
+    order because a different supplier moved is how a replan costs more than
+    the disruption did.
+    """
+    out = []
+    for write in erp_writes or []:
+        if write.get("action") != "create_alternate_po":
+            continue
+        p = write.get("payload") or {}
+        out.append({"supplier_id": p.get("supplier_id"),
+                    "units": int(p.get("quantity") or 0),
+                    "arrival_day": int(p.get("arrival_day") or 0)})
+    return out
+
+
+def apply_commitments(orders: list[SolverProdOrder],
+                      suppliers: list[SolverSupplier],
+                      commitments: list[dict]) -> tuple[list, list]:
+    """Net the committed units out of both sides of the problem.
+
+    Off the demand side: a committed unit arriving by an order's deadline
+    already covers part of it, so that order needs less. Applied in deadline
+    order, the same walk node 2 uses, so the two never disagree.
+
+    Off the supply side: a supplier who has already sold us 460 units has 460
+    fewer left, so the solver cannot spend them twice.
+    """
+    if not commitments:
+        return orders, suppliers
+
+    # Work on copies: the caller's commitment list is state and must survive
+    # this function unchanged, while the walk below consumes as it goes.
+    pool = sorted(({"supplier_id": c["supplier_id"], "units": c["units"],
+                    "arrival_day": c["arrival_day"]} for c in commitments),
+                  key=lambda c: c["arrival_day"])
+
+    netted: list[SolverProdOrder] = []
+    # Ordered by how late each order CAN run, not by when it is due. Committed
+    # units are scarce, and the order with no slack must have first claim on the
+    # early arrivals. Walking by raw deadline lets a flexible low-priority order
+    # take the day-4 delivery that the immovable high-priority one needed, and
+    # the re-solve then reports INFEASIBLE on supply that was merely misassigned.
+    for order in sorted(orders, key=lambda o: (o.deadline_day + o.max_delay_days,
+                                               o.deadline_day)):
+        need = order.units_required
+        # The LATEST this order could run, not its original date: the solver is
+        # still free to reschedule it. Matching on the original deadline strands
+        # commitments that arrive later while their availability has already
+        # been deducted, and the re-solve then reports INFEASIBLE on supply it
+        # actually owns.
+        latest = order.deadline_day + order.max_delay_days
+        for c in pool:
+            if need <= 0:
+                break
+            if c["arrival_day"] > latest or c["units"] <= 0:
+                continue
+            used = min(need, c["units"])
+            need -= used
+            c["units"] -= used
+        netted.append(order.model_copy(update={"units_required": need}))
+
+    bought: dict[str, int] = {}
+    for c in commitments:                       # the originals, not the pool
+        bought[c["supplier_id"]] = bought.get(c["supplier_id"], 0) + c["units"]
+    trimmed = [s.model_copy(update={
+        "available_quantity": max(0, s.available_quantity
+                                  - bought.get(s.supplier_id, 0))})
+        for s in suppliers]
+    return netted, trimmed
 
 
 def certified(supplier: Supplier, component: Component) -> bool:
@@ -149,7 +224,7 @@ def build_solver_input(
             lead_time_days=lead,
             available_quantity=available,
             min_order_quantity=sup.min_order_quantity,
-            effective_reliability=trust_read(sup.supplier_id, sup.reliability_score),
+            effective_reliability=reliability_of(sup.supplier_id, sup.reliability_score),
             certified=is_certified,
             quality_score=sup.quality_score,
             quote_expired=expired,

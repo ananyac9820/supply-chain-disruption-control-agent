@@ -48,7 +48,7 @@ from agent.errors import ToolBudgetExhausted
 from agent.llm import get_llm
 from agent.tools import call_tool
 from contracts.state import AgentState
-from agent.integrations import TRUST_AVAILABLE, trust_read, trust_write
+from agent.integrations import TRUST_AVAILABLE, reliability_of, trust_write
 
 MAX_STEPS = 12          # a hard stop independent of the budget, so a confused
                         # model cannot spin even if calls are being cached
@@ -277,13 +277,16 @@ def _absorb(work: dict, choice, result, done: dict, llm, seen: set) -> None:
             "certified": set(component["required_certifications"]) <= set(s.certifications),
             "quality_ok": s.quality_score >= component["min_quality"],
         } for s in result]
-        rejected = [
-            {"supplier_id": s["supplier_id"],
-             "reason": ("missing required certification"
-                        if not s["certified"] else
-                        f"quality {s['quality_score']} below the "
-                        f"{component['min_quality']} floor")}
-            for s in work["_catalog"] if not (s["certified"] and s["quality_ok"])]
+        rejected = []
+        for s in work["_catalog"]:
+            if s["certified"] and s["quality_ok"]:
+                continue
+            reason = ("missing required certification" if not s["certified"]
+                      else f"quality {s['quality_score']} below the "
+                           f"{component['min_quality']} floor")
+            rejected.append({"supplier_id": s["supplier_id"], "reason": reason,
+                             "rule": "G3" if not s["certified"] else "G4",
+                             "label": f"{s['supplier_id']}, rejected: {reason}"})
         work["rejected_alternatives"] = list(
             work.get("rejected_alternatives") or []) + rejected
         work["audit_events"] = append_event(
@@ -384,10 +387,10 @@ def _verify(work: dict, tracking) -> None:
         risk = None
 
         if status == "CONTRADICTED":
-            before = trust_read(claim["supplier_id"], _catalog_reliability(
+            before = reliability_of(claim["supplier_id"], _catalog_reliability(
                 work, claim["supplier_id"]))
             trust_write(claim["supplier_id"], "contradicted_claim")
-            after = trust_read(claim["supplier_id"], _catalog_reliability(
+            after = reliability_of(claim["supplier_id"], _catalog_reliability(
                 work, claim["supplier_id"]))
             detail |= {"trust_before": before, "trust_after": after,
                        "trust_ledger": "track-a" if TRUST_AVAILABLE else "in-process"}
