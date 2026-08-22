@@ -211,3 +211,20 @@ All eight cases now match, with `FEASIBLE` accepted for `OPTIMAL`. f01–f05
 were re-run to confirm the change moves nothing else: the adjusted order
 matches the price order in f01–f04, and in f05 the day-4 deadline forces
 SUP-42 first either way.
+
+---
+
+## The validate() context contract
+
+`contracts/models.py` freezes `validate(plan: SolverOutput, context: dict) ->
+Verdict` — the signature and the return type, but not the keys of `context`.
+`tests/solver/test_guardrails.py` (§5 item 8) asserts G2, so it needs one:
+
+| key | type | read by |
+|---|---|---|
+| `approval_limit` | float | G2 — **frozen key name** |
+
+`approval_limit` is the pinned name. `guardrails/validator.py` reads it by
+that spelling, the test asserts against it, and anything building a context
+supplies it. Further keys can be added as the other post-checks land; this
+one does not move.
