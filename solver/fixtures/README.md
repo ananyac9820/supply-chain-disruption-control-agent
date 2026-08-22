@@ -228,3 +228,25 @@ Verdict` — the signature and the return type, but not the keys of `context`.
 that spelling, the test asserts against it, and anything building a context
 supplies it. Further keys can be added as the other post-checks land; this
 one does not move.
+
+
+---
+
+## CP-SAT agrees with all eight, independently
+
+`solver/model.py` was written from §4.1 and the C6 ruling, then run against
+these files for the first time. **All eight matched on the first run**,
+including `status == "OPTIMAL"` exactly, where the greedy needs the
+FEASIBLE-for-OPTIMAL allowance.
+
+That is the check these fixtures existed for. The expectations were derived by
+hand from the objective before any solver existed; the model was built from
+the same specification without consulting the answers. Two independent
+derivations landing on the same allocations, the same costs and the same
+4-day delay on PROD-914 is evidence the objective is encoded correctly — which
+neither the hand-working nor a passing test could have established alone.
+
+Both solvers are run over every fixture in `tests/solver/test_fixtures.py`.
+`fallback.py` stays verified after `solver/__init__` was flipped to the real
+model: it is still the insurance policy, and an untested insurance policy is
+not one.

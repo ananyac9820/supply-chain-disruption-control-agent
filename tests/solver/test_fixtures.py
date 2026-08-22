@@ -14,7 +14,12 @@ from pathlib import Path
 import pytest
 
 from contracts.models import SolverInput, SolverOutput
-from solver import solve
+from solver import fallback, model
+
+# Both solvers, every fixture. fallback.py is the insurance policy — the cut
+# list ends with "ship it instead of CP-SAT" — so it has to stay verified
+# after solver/__init__ was flipped to the real model, not silently rot.
+SOLVERS = {"cp-sat": model.solve, "greedy": fallback.solve}
 
 FIXTURES = Path(__file__).resolve().parents[2] / "solver" / "fixtures"
 
@@ -52,8 +57,14 @@ def status_matches(expected: str, actual: str) -> bool:
     return {expected, actual} == {"OPTIMAL", "FEASIBLE"}
 
 
+@pytest.fixture(params=sorted(SOLVERS))
+def solve(request):
+    """Every check in this file runs against both solvers."""
+    return SOLVERS[request.param]
+
+
 @pytest.mark.parametrize("name", CASES)
-def test_fixture_matches_hand_computed_expectation(name):
+def test_fixture_matches_hand_computed_expectation(name, solve):
     inp, exp = load(name)
     got = solve(inp)
 
@@ -69,13 +80,13 @@ def test_fixture_matches_hand_computed_expectation(name):
 
 # --- the specific property each case exists to prove ---------------------
 
-def test_f01_single_supplier_hand_check():
+def test_f01_single_supplier_hand_check(solve):
     """§5.1 — gap 400, three suppliers, one correct answer."""
     got = solve(load("f01_simple")[0])
     assert allocations(got) == {("SUP-A", 400, 40000.0)}
 
 
-def test_f02_splits_across_two_suppliers_respecting_moq():
+def test_f02_splits_across_two_suppliers_respecting_moq(solve):
     """§5.2 — no single supplier has enough."""
     inp = load("f02_split")[0]
     got = solve(inp)
@@ -85,7 +96,7 @@ def test_f02_splits_across_two_suppliers_respecting_moq():
         assert a.units >= moq[a.supplier_id], f"{a.supplier_id} below its MOQ"
 
 
-def test_f03_overbuys_to_moq_only_because_the_total_still_wins():
+def test_f03_overbuys_to_moq_only_because_the_total_still_wins(solve):
     """§5.3 — the gap is 200 and the winning order is 500."""
     inp = load("f03_moq_overbuy")[0]
     got = solve(inp)
@@ -96,7 +107,7 @@ def test_f03_overbuys_to_moq_only_because_the_total_still_wins():
     assert got.total_cost < 54000.0, "buying exactly 200 from SUP-B would cost more"
 
 
-def test_f04_uncertified_supplier_is_absent_entirely():
+def test_f04_uncertified_supplier_is_absent_entirely(solve):
     """§5.4 — SUP-18 is cheapest AND fastest, and must not appear at all."""
     inp = load("f04_uncertified")[0]
     got = solve(inp)
@@ -106,7 +117,7 @@ def test_f04_uncertified_supplier_is_absent_entirely():
     assert "SUP-18" not in {a.supplier_id for a in got.allocations}
 
 
-def test_f05_reschedule_is_the_only_feasible_recovery():
+def test_f05_reschedule_is_the_only_feasible_recovery(solve):
     """§5.5 — procurement alone is infeasible; freeing r[p] is not."""
     inp, exp = load("f05_reschedule")
     assert inp.allow_reschedule
@@ -125,7 +136,7 @@ def test_f05_reschedule_is_the_only_feasible_recovery():
     assert not (delayed & high), "a non-delayable order was rescheduled"
 
 
-def test_f06_infeasible_names_a_real_binding_constraint():
+def test_f06_infeasible_names_a_real_binding_constraint(solve):
     """§5.6 — never a bare INFEASIBLE; the brief needs the reason."""
     got = solve(load("f06_infeasible")[0])
     assert got.status == "INFEASIBLE"
@@ -133,7 +144,7 @@ def test_f06_infeasible_names_a_real_binding_constraint():
     assert got.allocations == []
 
 
-def test_f07_trust_changes_the_allocation_within_a_run():
+def test_f07_trust_changes_the_allocation_within_a_run(solve):
     """§5.7 — identical input, one contradicted claim between, different answer.
 
     §4.5: a ledger that never alters a decision is worth nothing.
@@ -163,3 +174,37 @@ def test_every_fixture_file_validates_against_the_frozen_contract():
             SolverOutput.model_validate(payload)
         else:
             SolverInput.model_validate(payload)
+
+
+def test_cp_sat_is_deterministic_across_runs():
+    """A demo that returns a different plan on the second run is unusable.
+
+    num_search_workers is pinned to 1 for this reason: multi-worker CP-SAT can
+    return any of several equally optimal solutions depending on which worker
+    finishes first.
+    """
+    inp, _ = load("f05_reschedule")
+    runs = [model.solve(inp) for _ in range(5)]
+    first = runs[0]
+    for other in runs[1:]:
+        assert allocations(other) == allocations(first)
+        assert reschedules(other) == reschedules(first)
+        assert other.total_cost == first.total_cost
+
+
+def test_money_never_reaches_the_objective_as_a_float():
+    """§9.4: floats in a CP-SAT objective are the most likely bug in the track,
+    and they present as a plausible wrong answer rather than an error.
+
+    Prices with awkward decimal parts must still produce exact totals.
+    """
+    inp, _ = load("f01_simple")
+    awkward = inp.model_copy(deep=True)
+    for s in awkward.suppliers:
+        s.unit_price = s.unit_price + 0.07        # 100.07, 110.07, 130.07
+    out = model.solve(awkward)
+    assert out.status == "OPTIMAL"
+    units = out.allocations[0].units
+    price = next(s.unit_price for s in awkward.suppliers
+                 if s.supplier_id == out.allocations[0].supplier_id)
+    assert out.total_cost == pytest.approx(round(units * price, 2))
