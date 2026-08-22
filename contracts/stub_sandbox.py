@@ -147,12 +147,16 @@ class StubSandbox:
                 component_required_per_unit=1, deadline=date(2026, 9, 6),
                 priority="high", max_delay_days=0,
             ),
-            # PROD-914 exists and is delayable. That is what makes rung 2 of
-            # the infeasibility ladder demonstrable. Do not omit it.
+            # PROD-914 exists, is delayable, and falls DUE BEFORE PROD-882.
+            # That ordering is the whole point: it consumes on-hand stock
+            # ahead of the high-priority order, so delaying it is what
+            # releases stock for PROD-882. At a later deadline the lever
+            # frees nothing and rung 2 of the ladder never binds.
+            # Track A §4.7 prints Sept 8 here; corrected pre-freeze.
             ProductionOrder(
                 production_order_id="PROD-914", product="Auxiliary Drive Unit",
                 required_component="COMP-104", units_planned=700,
-                component_required_per_unit=1, deadline=date(2026, 9, 8),
+                component_required_per_unit=1, deadline=date(2026, 9, 4),
                 priority="low", max_delay_days=5,
             ),
         ]

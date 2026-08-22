@@ -98,6 +98,7 @@ class SolverInput(BaseModel):
     daily_usage: int
     suppliers: list[SolverSupplier]
     production_orders: list[SolverProdOrder]
+    min_quality: float = 0.0                   # G4 floor, enforced as C4
     budget_cap: float
     approval_limit: float = 150000
     allow_reschedule: bool = True
