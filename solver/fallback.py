@@ -19,6 +19,7 @@ plan that actually buys something.
 
 from dataclasses import dataclass
 
+from contracts.constants import W_RISK
 from contracts.models import (
     Allocation, Reschedule, SolverInput, SolverOutput, SolverSupplier,
 )
@@ -158,8 +159,25 @@ def _eligible(inp: SolverInput, relax: _Relax) -> list[SolverSupplier]:
          and (relax.certification or s.quality_score >= inp.min_quality)
          and not s.quote_expired
          and not s.claim_contradicted),
-        key=lambda s: (s.unit_price, s.lead_time_days, s.supplier_id),
+        key=lambda s: (_adjusted_price(s), s.lead_time_days, s.supplier_id),
     )
+
+
+def _adjusted_price(s: SolverSupplier) -> float:
+    """Unit price with the objective's risk term folded in.
+
+    §4.3 says "sort by unit price", which is underspecified: the risk term is
+    the only route by which a trust decrement moves an allocation, so a
+    price-only sweep cannot reproduce §4.5's requirement that the ledger
+    change the answer inside a single run. Since the cut list ends with
+    "ship fallback.py instead of CP-SAT", a price-only greedy would silently
+    kill the supplier-risk story exactly when it is the only solver left.
+
+    This is the same weight the CP-SAT objective uses, imported from
+    contracts.constants so the two cannot drift. The fallback stays a
+    degraded version of the real objective, not a different one.
+    """
+    return s.unit_price + W_RISK * (1 - s.effective_reliability)
 
 
 def _requirements(inp: SolverInput, delays: dict[str, int]) -> list[tuple[int, int]]:

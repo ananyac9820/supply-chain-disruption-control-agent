@@ -123,24 +123,32 @@ SUP-21 at 129.2 (vs SUP-42 139.6, SUP-55 144.0, SUP-37 145.8).
 **SUP-21 × 700 + SUP-42 × 460, PROD-914 delayed 4 days, `relaxation_used =
 "reschedule"`.**
 
-> ⚠️ **This fixture depends on a reading of C6 — flagging rather than
-> guessing.** As printed in §4.1, C6 is written per order:
+> **C6 is cumulative. Ruled, not assumed.**
+>
+> As printed in §4.1, C6 is written per order:
 >
 >     usable_stock - safety_stock + sum(arrivals by deadline[p] + r[p]) >= units_required[p]
 >
 > Taken literally, every order compares against the *same* `usable_stock`, so
 > the 240 units on hand are counted once for PROD-914 and again for PROD-882.
-> Under that reading the answer is 460 units total and both orders are
-> declared satisfiable from stock that only exists once — physically wrong,
-> and it makes §7 B-4 ("two production orders compete for the same
-> component") unrepresentable.
+> Under that reading f05 needs 460 units total and both orders are declared
+> satisfiable from stock that only exists once — physically wrong, and it
+> makes §7 B-4 ("two production orders compete for the same component")
+> unrepresentable.
 >
-> These expectations use the **cumulative** reading: orders are walked in
-> deadline order and each consumes stock the earlier ones left. That is the
-> only reading under which competition is real. It changes f05's answer from
-> 460 units to 1,160, so it needs to be a deliberate decision, not a silent
-> one — and the CP-SAT model in `solver/model.py` must implement the same
-> reading. No other fixture here has two orders, so nothing else moves.
+> **The ruling: the per-order form in §4.1 is a spec bug. C6 is cumulative.**
+> Production orders are sorted by effective deadline (`deadline_day + r[p]`)
+> and each consumes what earlier orders left of `usable_stock - safety_stock`.
+> f05's expected output above is computed under that reading and re-verified
+> against it: 1,160 units, not 460.
+>
+> **`solver/model.py` must implement the cumulative form when CP-SAT lands.**
+> Encoding §4.1's constraint verbatim will produce a model that solves,
+> returns a plausible plan, and starves a production line — the exact failure
+> mode these fixtures exist to catch. `solver/fallback.py` already walks
+> orders in deadline order with a running stock balance; the CP-SAT model
+> needs the same, as a cumulative arrival constraint per deadline rather than
+> an independent one per order.
 
 ## f06_infeasible — 500 short, 200 in the world
 
@@ -179,26 +187,27 @@ decoration.
 
 ---
 
-## Known divergence: f07 under the greedy fallback
+## The fallback's sort key — resolved
 
-Run against `solver/fallback.py`, seven of the eight cases match these
-expectations exactly (allowing FEASIBLE for OPTIMAL). **f07_trust_after does
-not**: the fallback returns SUP-X × 400 where the objective says SUP-Y × 400.
+An earlier revision of `fallback.py` sorted candidates by unit price, per the
+literal wording of §4.3, and returned SUP-X for f07_trust_after where the
+objective says SUP-Y. That was not a fixture error: the risk term is the only
+route by which a trust decrement moves an allocation, so a price-only sweep
+cannot express §4.5 at all — SUP-X stays cheapest however far its reliability
+falls.
 
-This is not a fixture error, and it is not a bug in the fallback either.
-§4.3 specifies the greedy as "sort certified suppliers by unit price" — price
-only. The risk term is the entire mechanism by which a trust decrement
-changes an allocation, so a price-sorted greedy cannot express D-4 at all.
-SUP-X stays cheapest no matter how far its reliability falls.
+It mattered because the fallback is the insurance policy. The cut list ends
+with "CP-SAT itself, shipping fallback.py instead", and under that cut a
+price-only greedy would have killed the supplier-risk story silently: ledger
+updating, printing, changing nothing.
 
-It matters because the fallback is the insurance policy: the cut list ends
-with "CP-SAT itself, shipping fallback.py instead". If that cut is ever
-taken, the supplier-risk story (15% of the rubric, demo Act 2) stops working
-silently — the trust ledger still updates, still prints, and no longer
-changes a single decision.
+**Ruled: §4.3's "unit price" was underspecified.** The fallback now sorts by
+`unit_price + 40 × (1 - effective_reliability)` — the objective's own risk
+weight, imported from `contracts.constants.W_RISK` so the two cannot drift.
+The fallback is a degraded version of the CP-SAT objective, not a different
+objective.
 
-The fix is one line — sort by `unit_price + 40 × (1 − effective_reliability)`
-instead of `unit_price` — and it changes no other fixture here: the adjusted
-order matches the price order in f01–f04, and in f05 the day-4 deadline
-forces SUP-42 first either way. It is left undone deliberately, because §4.3
-says price and the track document wins. **Person A's call.**
+All eight cases now match, with `FEASIBLE` accepted for `OPTIMAL`. f01–f05
+were re-run to confirm the change moves nothing else: the adjusted order
+matches the price order in f01–f04, and in f05 the day-4 deadline forces
+SUP-42 first either way.
