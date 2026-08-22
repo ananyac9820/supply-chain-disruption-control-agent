@@ -117,7 +117,14 @@ EXPLAIN_SYSTEM = DOMAIN + (
     "quote them, never recompute them, never round them differently. If a "
     "verification_delta is present, say plainly that checking the supplier's "
     "claim is what changed the cost and, when it crossed the approval "
-    "threshold, that the check is why a human is being asked at all."
+    "threshold, that the check is why a human is being asked at all.\n\n"
+    "Register matters. A claim that tracking does not support means the units "
+    "cannot be confirmed - it does not mean the supplier lied. Write "
+    "'inconsistent with tracking', 'units unconfirmed', 'pending evidence'. "
+    "Never write that a supplier lied, was dishonest, or cannot be trusted: "
+    "the same evidence is equally consistent with a courier that failed to "
+    "collect, and only an incident the evidence attributes to the supplier "
+    "moves its reputation."
 )
 
 CLASSIFY_SYSTEM = DOMAIN + (
@@ -316,8 +323,9 @@ class RuleBasedLLM:
         if delta and delta.get("delta"):
             excluded = ", ".join(delta.get("suppliers_excluded") or [])
             body += (f" Checking {excluded}'s dispatch claim against tracking "
-                     f"removed it from the candidate set, which moved the cost "
-                     f"from {delta['cost_if_unverified']:,.0f} to "
+                     f"left its units unconfirmed, so they are not counted "
+                     f"toward coverage. That moved the cost from "
+                     f"{delta['cost_if_unverified']:,.0f} to "
                      f"{delta['cost_as_planned']:,.0f} - a difference of "
                      f"{delta['delta']:,.0f}.")
             if delta.get("crossed_threshold"):

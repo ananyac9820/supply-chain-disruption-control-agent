@@ -36,8 +36,11 @@ A VAGUE reply — no date and no quantity commitment — must not advance the
 plan. Exactly one targeted follow-up naming the PO and demanding both, and
 alternate sourcing proceeds in parallel rather than waiting for the answer.
 
-A CONTRADICTED claim calls trust_write and that supplier's units count as zero
-confirmed from then on, in this same solve rather than merely the next run.
+A discrepancy between a claim and tracking produces an INCIDENT WITH AN
+ATTRIBUTION, not a verdict on the supplier. The units on that PO become
+unconfirmed in this same solve whatever the cause; reputation moves only when
+the evidence attributes the incident to SUPPLIER. Both consequences are
+recorded, and the trail says which one applied and why.
 """
 
 from __future__ import annotations
@@ -48,7 +51,9 @@ from agent.errors import ToolBudgetExhausted
 from agent.llm import get_llm
 from agent.tools import call_tool
 from contracts.state import AgentState
-from agent.integrations import TRUST_AVAILABLE, reliability_of, trust_write
+from agent.integrations import (TRUST_AVAILABLE, attribute, has_discrepancy,
+                                record_incident, reliability_of,
+                                shipment_confidence, units_confirmed)
 
 MAX_STEPS = 12          # a hard stop independent of the budget, so a confused
                         # model cannot spin even if calls are being cached
@@ -369,44 +374,103 @@ def _absorb_replies(work: dict, messages, llm, seen: set) -> None:
 
 
 def _verify(work: dict, tracking) -> None:
-    """Tag every pending claim against ground truth."""
+    """Check every pending claim against tracking evidence.
+
+    A discrepancy produces an INCIDENT WITH AN ATTRIBUTION, and the consequence
+    follows the attribution rather than the inconvenience:
+
+        always                    record the incident, drop shipment confidence
+                                  for that PO, treat those units as unconfirmed
+        attribution == SUPPLIER   and only then, reputation moves
+
+    The claim itself is still tagged GROUNDED / CONTRADICTED / UNVERIFIABLE,
+    because the claim genuinely is contradicted by the evidence. What the split
+    changes is who is penalised for it. A dispatch claim standing against
+    label_created_no_pickup is consistent with a supplier that never tendered
+    the goods AND with one that packed on time while the courier failed to
+    collect; nothing in the tracking record separates those. So the units are
+    unconfirmed either way, and reputation waits for evidence that supports it.
+
+    Track B does not decide attribution — sandbox/attribution.py reads the
+    evidence — and does not move reputation itself: trust.record_incident does
+    that, only for SUPPLIER.
+    """
     claims = list(work.get("claims") or [])
+    now = clock.now()
+    po_id = tracking.po_id
+
     for claim in claims:
         if claim["status"] != "PENDING":
             continue
+        supplier_id = claim["supplier_id"]
         status, reason = _grade(claim["claim"], tracking)
         claim["status"] = status
-        claim["evidence"] = {"po_id": tracking.po_id,
+        claim["evidence"] = {"po_id": po_id,
                              "supplier_claim": tracking.supplier_claim,
                              "tracking_status": tracking.tracking_status,
                              "last_movement": (tracking.last_movement.isoformat()
                                                if tracking.last_movement else None)}
-        detail = {"supplier_id": claim["supplier_id"], "claim": claim["claim"],
+        detail = {"supplier_id": supplier_id, "claim": claim["claim"],
                   "evidence": claim["evidence"], "verdict": status,
                   "rationale": reason}
         risk = None
+        summary = (f'{supplier_id} claim "{claim["claim"]}" inconsistent with '
+                   f'tracking ({tracking.tracking_status})')
 
-        if status == "CONTRADICTED":
-            before = reliability_of(claim["supplier_id"], _catalog_reliability(
-                work, claim["supplier_id"]))
-            trust_write(claim["supplier_id"], "contradicted_claim")
-            after = reliability_of(claim["supplier_id"], _catalog_reliability(
-                work, claim["supplier_id"]))
-            detail |= {"trust_before": before, "trust_after": after,
-                       "trust_ledger": "track-a" if TRUST_AVAILABLE else "in-process"}
-            risk = (f"{claim['supplier_id']}'s units now count as 0 confirmed; "
-                    f"it is excluded from the next solve by G9")
+        if status == "CONTRADICTED" and has_discrepancy(tracking):
+            attribution, basis, observed, expected = attribute(tracking, now)
+            catalog = _catalog_reliability(work, supplier_id)
+
+            before_conf = shipment_confidence(po_id)
+            before_rep = reliability_of(supplier_id, catalog)
+            incident_id = record_incident(po_id, supplier_id, observed, expected,
+                                          attribution, basis)
+            after_conf = shipment_confidence(po_id)
+            after_rep = reliability_of(supplier_id, catalog)
+
+            claim |= {"incident_id": incident_id, "attribution": attribution,
+                      "attribution_basis": basis,
+                      "shipment_confidence": after_conf,
+                      "units_confirmed": units_confirmed(po_id),
+                      "reputation_moved": after_rep != before_rep}
+            detail |= {
+                "incident_id": incident_id,
+                "attribution": attribution,
+                "attribution_basis": basis,
+                "observed": observed,
+                "expected": expected,
+                "shipment_confidence_before": before_conf,
+                "shipment_confidence_after": after_conf,
+                "units_confirmed": units_confirmed(po_id),
+                "reputation_before": before_rep,
+                "reputation_after": after_rep,
+                "reputation_moved": after_rep != before_rep,
+                "trust_ledger": "track-a" if TRUST_AVAILABLE else "in-process",
+                "rationale": (
+                    f"{reason}. The shipment is unverifiable either way, so its "
+                    f"units are not counted toward coverage. Attribution is "
+                    f"{attribution}: {basis}"
+                    + ("" if after_rep != before_rep else
+                       ", so reputation is unchanged pending evidence")),
+            }
+            risk = (f"{supplier_id} units on {po_id} unconfirmed "
+                    f"(shipment confidence {after_conf:.2f})"
+                    + ("" if after_rep != before_rep else
+                       "; reputation unchanged pending evidence"))
         elif status == "UNVERIFIABLE" and "certif" in claim["claim"].lower():
             detail["treated_as"] = "absent"
             risk = ("an unverifiable certification claim is treated as absent, "
                     "not present - conservative by design")
+            summary = (f'{supplier_id} claim "{claim["claim"]}" could not be '
+                       f'verified against tracking')
+        elif status == "GROUNDED":
+            summary = (f'{supplier_id} claim "{claim["claim"]}" supported by '
+                       f'tracking ({tracking.tracking_status})')
 
         work["audit_events"] = append_event(
             work, type="verification", actor="verification_agent",
-            summary=(f'{claim["supplier_id"]} "{claim["claim"]}" vs '
-                     f'{tracking.tracking_status} -> {status}'),
-            detail=detail, tools_used=[f"GET /tracking/{tracking.po_id}"],
-            remaining_risk=risk)
+            summary=summary, detail=detail,
+            tools_used=[f"GET /tracking/{po_id}"], remaining_risk=risk)
     work["claims"] = claims
 
 

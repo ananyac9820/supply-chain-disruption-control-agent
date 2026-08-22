@@ -179,8 +179,11 @@ def _write_plan(work: dict, plan: dict, human: dict) -> list[dict]:
         if claim.get("status") in ("CONTRADICTED", "UNVERIFIABLE"):
             writes.append(_erp(work, "attach_supplier_note", {
                 "supplier_id": claim["supplier_id"],
-                "note": (f"claim \"{claim['claim']}\" was {claim['status']} "
-                         f"against tracking on {work.get('disruption_id')}"),
+                "note": (f"claim \"{claim['claim']}\" inconsistent with tracking "
+                         f"on {work.get('disruption_id')}; attribution "
+                         f"{claim.get('attribution', 'not established')}"),
+                "attribution": claim.get("attribution"),
+                "shipment_confidence": claim.get("shipment_confidence"),
                 "evidence": claim.get("evidence"),
             }, "what verification found has to outlive this run or the next "
                "planner starts from the same false premise"))
@@ -262,7 +265,15 @@ def _remaining_risk(work: dict, plan: dict, assumptions: list[dict]) -> str | No
                     f"{soonest['claim']}")
     for claim in work.get("claims") or []:
         if claim.get("status") == "CONTRADICTED":
-            bits.append(f"{claim['supplier_id']} remains untrusted for this run")
+            confidence = claim.get("shipment_confidence")
+            bits.append(
+                f"{claim['supplier_id']} units on "
+                f"{(claim.get('evidence') or {}).get('po_id', 'the disrupted PO')} "
+                f"remain unconfirmed"
+                + (f" (shipment confidence {confidence:.2f})"
+                   if confidence is not None else "")
+                + ("" if claim.get("reputation_moved")
+                   else "; reputation unchanged pending evidence"))
     if int(work.get("tool_budget_remaining", 1)) <= 0:
         bits.append("INCOMPLETE_INVESTIGATION: the tool budget ran out")
     if not bits:

@@ -113,14 +113,65 @@ def _recommended(plan: dict) -> str:
     return "Recommended Plan:\n" + "\n".join(rows) if rows else ""
 
 
+# Hard constraints. A supplier failing one of these is removed from the
+# candidate set outright; no price, lead time or reliability compensates.
+HARD_RULES = ("G3", "G4", "G8", "G11")
+# The shipment axis. The supplier is not eliminated and not judged - its units
+# simply cannot be counted until the evidence supports counting them.
+UNCONFIRMED_RULES = ("G9",)
+
+
 def _reasoning(state: dict, plan: dict) -> str:
-    parts = []
-    if plan.get("rationale"):
-        parts.append(f"  {plan['rationale']}")
+    """Two stages, shown as two stages.
+
+    A reader who sees one paragraph of justification reasonably asks whether
+    cost, delivery, quality and trust were rolled into a single weighted score.
+    They were not. Eligibility is a FILTER applied first, and only the
+    survivors reach an optimisation. Printing the filter separately, with the
+    eliminated suppliers named, is what makes that visible - and the strongest
+    evidence is that the cheapest and fastest supplier in the catalog is in the
+    eliminated list. No weighting could have rescued it, because it was never
+    weighed.
+
+    The third section is neither: a supplier whose shipment cannot be confirmed
+    is not eliminated on its merits and has not been found at fault. Its units
+    are uncountable, which is a different thing and is recorded as one.
+    """
     rejected = state.get("rejected_alternatives") or []
-    if rejected:
-        parts.append("  Alternatives considered and rejected:")
-        parts.extend(f"    {r.get('label') or r.get('supplier_id')}" for r in rejected)
+    hard = [r for r in rejected if r.get("rule") in HARD_RULES]
+    unconfirmed = [r for r in rejected if r.get("rule") in UNCONFIRMED_RULES]
+    other = [r for r in rejected
+             if r.get("rule") not in HARD_RULES + UNCONFIRMED_RULES]
+
+    parts: list[str] = []
+
+    if hard or other:
+        parts.append("  Eliminated (hard constraints - no price or reliability "
+                     "overrides these):")
+        for r in hard + other:
+            parts.append(f"    {r['supplier_id']:<8}{r.get('reason', '')}")
+
+    parts.append("  Optimised across feasible combinations:")
+    if plan.get("rationale"):
+        parts.append(f"    {plan['rationale']}")
+    delta = plan.get("verification_delta")
+    if delta and delta.get("delta"):
+        parts.append(
+            f"    the same combination without the tracking check costs "
+            f"{delta['cost_if_unverified']:,.0f}; the check moved it to "
+            f"{delta['cost_as_planned']:,.0f}")
+
+    if unconfirmed:
+        parts.append("  Excluded from confirmed supply:")
+        for r in unconfirmed:
+            parts.append(f"    {r['supplier_id']:<8}{r.get('reason', '')}")
+        for claim in state.get("claims") or []:
+            if claim.get("attribution"):
+                moved = claim.get("reputation_moved")
+                parts.append(
+                    f"    attribution {claim['attribution']}; reputation "
+                    + ("adjusted on attributed evidence" if moved
+                       else "unchanged pending evidence"))
     return "Reasoning:\n" + "\n".join(parts) if parts else ""
 
 
@@ -137,6 +188,12 @@ def _no_action(base: dict) -> str:
     if base.get("cost_of_inaction") is not None:
         rows.append(f"  cost of inaction {base['cost_of_inaction']:,.0f} "
                     f"over a {base.get('horizon_days', '?')}-day horizon")
+    # Fixed at detection, deliberately. The baseline's job is to be a stable
+    # denominator: recomputing it on every replan would make "12% over baseline"
+    # mean something different each time it was quoted. Saying so on the page
+    # stops a reader taking a figure that predates the last replan as stale.
+    rows.append("  measured as at detection and held fixed across replans, so "
+                "the comparison means the same thing every time it is quoted")
     return "Cost of No Action:\n" + "\n".join(rows)
 
 
@@ -173,8 +230,15 @@ def _remaining(state: dict, plan: dict, assessment: dict | None) -> str:
             rows.append(f"  {a['id']} expires {a['expires_at']}: {a['claim']}")
     for claim in state.get("claims") or []:
         if claim.get("status") == "CONTRADICTED":
-            rows.append(f"  {claim['supplier_id']} is not trusted for this run; "
-                        f"its units count as 0 confirmed")
+            confidence = claim.get("shipment_confidence")
+            rows.append(
+                f"  {claim['supplier_id']} units on "
+                f"{(claim.get('evidence') or {}).get('po_id', 'the disrupted PO')} "
+                f"unconfirmed"
+                + (f" (shipment confidence {confidence:.2f})"
+                   if confidence is not None else "")
+                + "; pending evidence, reputation unchanged"
+                if not claim.get("reputation_moved") else "")
         elif claim.get("status") == "UNVERIFIABLE":
             rows.append(f"  {claim['supplier_id']} claim \"{claim['claim']}\" could "
                         f"not be verified and is treated as absent")
@@ -205,6 +269,18 @@ def main() -> None:
                    "replies_received": [], "rejected_alternatives": []}
     for e in events:
         d = e.get("detail") or {}
+        if e["type"] == "verification" and d.get("attribution"):
+            # so the standalone renderer shows the attribution line too - a
+            # brief reconstructed from the trail has to say the same thing the
+            # live one did
+            state["claims"].append({
+                "supplier_id": d["supplier_id"], "claim": d.get("claim"),
+                "status": d.get("verdict"), "evidence": d.get("evidence"),
+                "attribution": d["attribution"],
+                "attribution_basis": d.get("attribution_basis"),
+                "shipment_confidence": d.get("shipment_confidence_after"),
+                "units_confirmed": d.get("units_confirmed"),
+                "reputation_moved": d.get("reputation_moved")})
         if e["type"] == "disruption_detected":
             state |= {"disruption_type": d.get("disruption_type"),
                       "severity": d.get("severity"),

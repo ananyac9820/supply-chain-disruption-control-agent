@@ -60,10 +60,13 @@ BASELINE = {
 
 PLAN_COST = 152_010.0
 REJECTED = [
-    {"supplier_id": "SUP-18",
-     "reason": "quality 0.79 below the 0.90 floor for COMP-104 (G4)"},
+    {"supplier_id": "SUP-18", "rule": "G3",
+     "reason": "missing Automotive-Grade certification"},
+    {"supplier_id": "SUP-18", "rule": "G4",
+     "reason": "quality 0.79 below floor 0.90"},
     {"supplier_id": "SUP-21",
-     "reason": "dispatch claim CONTRADICTED by tracking; units count as 0 confirmed (G9)"},
+     "rule": "G9",
+     "reason": "shipment confidence 0.40 - units unconfirmed pending evidence"},
 ]
 
 
@@ -158,16 +161,28 @@ def generate(path: str | Path | None = None, disruption_id: str = "DIS-001") -> 
     tool(5.2, "GET /tracking/PO-7712",
          "supplier claim must be grounded before it can support the plan")
     log.emit(ts=_t(5.4), type="verification", actor="verification_agent",
-             summary='SUP-21 "dispatched" vs label_created_no_pickup -> CONTRADICTED',
+             summary='SUP-21 claim "dispatched" inconsistent with tracking '
+                     '(label_created_no_pickup)',
              detail={"supplier_id": "SUP-21", "claim": "dispatched",
                      "evidence": {"tracking_status": "label_created_no_pickup",
                                   "last_movement": None},
                      "verdict": "CONTRADICTED",
-                     "trust_before": 0.72, "trust_after": 0.58,
-                     "rationale": "trust_write(SUP-21, contradicted_claim); the new score "
-                                  "is used in this same solve, not merely the next run"},
+                     "attribution": "UNATTRIBUTED",
+                     "attribution_basis": "a label exists but no pickup was scanned; "
+                                          "consistent both with goods never tendered "
+                                          "and with a collection that was never made",
+                     "shipment_confidence_before": 1.0,
+                     "shipment_confidence_after": 0.4,
+                     "units_confirmed": False,
+                     "reputation_before": 0.72, "reputation_after": 0.72,
+                     "reputation_moved": False,
+                     "rationale": "the shipment is unverifiable either way, so its units "
+                                  "are not counted toward coverage; attribution is "
+                                  "UNATTRIBUTED, so reputation is unchanged pending "
+                                  "evidence"},
              tools_used=["GET /tracking/PO-7712"],
-             remaining_risk="SUP-21's 600 units now count as 0 confirmed")
+             remaining_risk="SUP-21 units on PO-7712 unconfirmed (shipment "
+                            "confidence 0.40); reputation unchanged pending evidence")
 
     # 14-16 - alternate sourcing.
     tool(6.0, "GET /suppliers?component_id=COMP-104",
@@ -179,8 +194,9 @@ def generate(path: str | Path | None = None, disruption_id: str = "DIS-001") -> 
              detail={"cumulative_requirement_units": 1400, "usable_stock": 390,
                      "safety_stock": 150, "free_of_safety_stock": 240, "gap": 1160,
                      "candidates": ["SUP-42", "SUP-55", "SUP-37"],
-                     "rationale": "SUP-18 fails the quality floor and SUP-21 is "
-                                  "contradicted, so neither enters the solver input"})
+                     "rationale": "SUP-18 fails certification and the quality floor; "
+                                  "SUP-21's units are unconfirmed, so neither can be "
+                                  "counted toward coverage"})
 
     # 17-18 - the ladder. PS 4.10 "decision" + "alternatives considered".
     log.emit(ts=_t(7.2), type="decision", actor="solver",

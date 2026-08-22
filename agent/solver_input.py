@@ -29,7 +29,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from agent.impact_math import days_from, units_required
-from agent.integrations import reliability_of
+from agent.integrations import UNCONFIRMED_BELOW, reliability_of
 from contracts.constants import (APPROVAL_THRESHOLD, EMERGENCY_BUDGET,
                                  PRIORITY_WEIGHT)
 from contracts.models import (Component, ProductionOrder, SolverInput,
@@ -122,6 +122,33 @@ def apply_commitments(orders: list[SolverProdOrder],
     return netted, trimmed
 
 
+def _unconfirmed(claim: dict) -> bool:
+    """Whether this claim leaves its supplier's units uncountable.
+
+    Prefers the recorded shipment confidence; falls back to the claim tag for a
+    claim recorded before the two axes existed.
+    """
+    confidence = claim.get("shipment_confidence")
+    if confidence is not None:
+        return float(confidence) < UNCONFIRMED_BELOW
+    if claim.get("units_confirmed") is False:
+        return True
+    return claim.get("status") == "CONTRADICTED"
+
+
+def confidence_map(claims: list[dict]) -> dict[str, float]:
+    """{supplier_id: shipment_confidence} for guardrails' G9."""
+    out: dict[str, float] = {}
+    for claim in claims:
+        confidence = claim.get("shipment_confidence")
+        if confidence is None and _unconfirmed(claim):
+            confidence = 0.0
+        if confidence is not None:
+            sid = claim["supplier_id"]
+            out[sid] = min(out.get(sid, 1.0), float(confidence))
+    return out
+
+
 def certified(supplier: Supplier, component: Component) -> bool:
     return set(component.required_certifications) <= set(supplier.certifications)
 
@@ -153,12 +180,28 @@ def build_solver_input(
     reports the difference, which is what the verification was worth. It is
     never used for a plan that executes - only to measure one.
     """
+    # SolverSupplier.claim_contradicted is a frozen field name, and its meaning
+    # is now the shipment axis: "the units from this supplier cannot be
+    # confirmed", not "this supplier acted in bad faith". A claim tagged
+    # CONTRADICTED is what triggers the check, but what fills the flag is the
+    # shipment confidence that resulted — which is also what guardrails' G9
+    # keys on, so the pre-solve filter and the post-check agree.
     contradicted = set() if ignore_contradictions else {
-        c["supplier_id"] for c in claims if c.get("status") == "CONTRADICTED"}
+        c["supplier_id"] for c in claims if _unconfirmed(c)}
     by_quote = {q["supplier_id"]: q for q in quotes}
 
     eligible: list[SolverSupplier] = []
     rejected: list[dict] = []
+
+    # The latest day any order could still run, allowing for every reschedule
+    # the solver is permitted. A supplier that cannot deliver by then cannot
+    # contribute to any plan, so it is a hard elimination like certification -
+    # and naming it is what shows the brief's first section is a filter and not
+    # a low weighting.
+    horizon = max((days_from(now, o.deadline) + o.max_delay_days
+                   for o in production_orders
+                   if o.required_component == component.component_id),
+                  default=None)
 
     for sup in suppliers:
         if sup.component_id != component.component_id:
@@ -188,21 +231,44 @@ def build_solver_input(
         # Both still appear in rejected_alternatives: the audit trail wants
         # every supplier that was considered and set aside, whoever set it
         # aside.
-        reason, rule, drop = None, None, False
-        if not is_certified:
-            missing = ", ".join(missing_certifications(sup, component))
-            reason, rule, drop = f"missing {missing} certification", "G3", True
-        elif not quality_ok:
-            reason, rule, drop = (f"quality {sup.quality_score} below the "
-                                  f"{component.min_quality} floor"), "G4", True
-        elif is_contradicted:
-            reason, rule = ("dispatch claim CONTRADICTED by tracking; units "
-                            "count as 0 confirmed"), "G9"
-        elif expired:
-            reason, rule = (f"quote expired after "
-                            f"{quote['quote_valid_hours']}h"), "G8"
+        lead = int(quote["delivery_days"]) if quote else sup.lead_time_days
 
-        if reason is not None:
+        # EVERY hard constraint a supplier fails is recorded, not just the
+        # first. SUP-18 is both uncertified AND under the quality floor, and
+        # the brief's whole argument is that eligibility is a filter rather
+        # than a weighting - a filter that reported one reason and stopped
+        # would understate how far outside the candidate set it sits.
+        failures: list[tuple[str, str]] = []
+        if not is_certified:
+            failures.append(("G3", f"missing "
+                             f"{', '.join(missing_certifications(sup, component))} "
+                             f"certification"))
+        if not quality_ok:
+            failures.append(("G4", f"quality {sup.quality_score:.2f} below floor "
+                                   f"{component.min_quality:.2f}"))
+        if horizon is not None and lead > horizon:
+            failures.append(("G11", f"lead time {lead}d cannot meet the latest "
+                                    f"deadline (day {horizon}) even fully "
+                                    f"rescheduled"))
+        drop = bool(failures)
+
+        # Not eliminations. The supplier remains a candidate on its merits; the
+        # solver's own filters decide what to do with the flag.
+        if not drop and is_contradicted:
+            confidence = next(
+                (c.get("shipment_confidence") for c in claims
+                 if c["supplier_id"] == sup.supplier_id
+                 and c.get("shipment_confidence") is not None), None)
+            failures.append(("G9",
+                             f"shipment confidence {confidence:.2f} - units "
+                             f"unconfirmed pending evidence"
+                             if confidence is not None
+                             else "units unconfirmed pending evidence"))
+        if not drop and expired:
+            failures.append(("G8", f"quote expired after "
+                                   f"{quote['quote_valid_hours']}h"))
+
+        for rule, reason in failures:
             rejected.append({
                 "supplier_id": sup.supplier_id, "rule": rule, "reason": reason,
                 # the phrasing the decision brief prints verbatim
@@ -283,5 +349,9 @@ def validator_context(inp: SolverInput, plan, quotes: list[dict],
         "safety_stock_breach_justification": justification,
         "quotes": quotes,
         "claims": claims,
+        # G9 keys on the shipment axis now. claims stays for their documented
+        # legacy path, but shipment_confidence is what the rule should read.
+        "shipment_confidence": confidence_map(claims),
+        "unconfirmed_below": UNCONFIRMED_BELOW,
         "now": now,
     }

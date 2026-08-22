@@ -35,7 +35,15 @@ from output.audit import iter_jsonl
 
 # Verdict and status words that get colour wherever they appear in a summary.
 VERDICT_STYLES = {
+    # The claim tag. The claim genuinely is contradicted by the evidence -
+    # what the two-axis split changed is who is penalised for it, not whether
+    # the discrepancy exists.
     "CONTRADICTED": "bold red",
+    "inconsistent": "bold yellow",
+    "unconfirmed": "yellow",
+    "UNATTRIBUTED": "cyan",
+    "SUPPLIER": "bold red",
+    "COURIER": "cyan",
     "UNVERIFIABLE": "yellow",
     "VAGUE": "yellow",
     "GROUNDED": "green",
@@ -188,13 +196,36 @@ class TraceRenderer:
                            style="dim")
 
         if etype == "verification":
-            before, after = detail.get("trust_before"), detail.get("trust_after")
-            if before is not None and after is not None:
+            # Two axes, shown as two lines, because collapsing them is exactly
+            # the error the split exists to prevent. The first is about a
+            # consignment; the second is about a counterparty, and on this
+            # evidence it usually has not moved.
+            po = (detail.get("evidence") or {}).get("po_id", "")
+            before_c = detail.get("shipment_confidence_before")
+            after_c = detail.get("shipment_confidence_after")
+            if before_c is not None and after_c is not None:
                 t = Text()
-                t.append(f"trust {detail.get('supplier_id', '')}".rstrip() + "  ", style="dim")
-                t.append(f"{before} -> {after}", style="bold red")
-                t.append("   (feeds the next solve)", style="dim")
+                t.append(f"shipment confidence {po} ".rstrip() + "  ", style="dim")
+                t.append(f"{before_c:.2f} -> {after_c:.2f}", style="bold yellow")
+                if detail.get("units_confirmed") is False:
+                    t.append("  - units unconfirmed", style="yellow")
                 yield t
+
+            attribution = detail.get("attribution")
+            if attribution:
+                t = Text()
+                t.append("attribution: ", style="dim")
+                t.append(attribution,
+                         style="bold red" if attribution == "SUPPLIER" else "cyan")
+                if detail.get("reputation_moved"):
+                    t.append(f"  - reputation {detail['reputation_before']:.2f} -> "
+                             f"{detail['reputation_after']:.2f}", style="bold red")
+                else:
+                    t.append("  - supplier reputation unchanged pending evidence",
+                             style="dim")
+                yield t
+                if detail.get("attribution_basis"):
+                    yield Text(f"  {detail['attribution_basis']}", style="dim italic")
 
         if etype == "decision":
             for a in detail.get("allocations", []):
