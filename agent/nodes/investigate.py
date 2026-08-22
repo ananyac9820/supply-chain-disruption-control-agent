@@ -129,6 +129,10 @@ def investigate(state: AgentState) -> dict:
            ("tools_called", "tool_budget_remaining", "messages_sent",
             "replies_received", "claims", "quotes", "rejected_alternatives",
             "audit_events") if k in work}
+    if replanning:
+        # The break has been acted on. Leaving it set would make node 6's
+        # router read a stale flag and replan a second time for the same cause.
+        out["broken_assumption"] = None
     if exhausted:
         out["tool_budget_remaining"] = 0
     return out

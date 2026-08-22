@@ -9,6 +9,7 @@ re-derived.
 
     (a) 3 investigate --[tool budget exhausted, G10]--> 5 gate      fail closed
     (b) 4 plan        --[validator veto, < 2 rounds]--> 4 plan      re-solve
+        4 plan        --[G8 expired quote, < 3]-----> 3 investigate re-RFQ
     (c) 5 gate        --[approve | auto]-------------> 6 execute
         5 gate        --[edit]--------------------->   4 plan
         5 gate        --[reject]------------------->   END
@@ -23,6 +24,7 @@ from __future__ import annotations
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
+from agent.integrations import GUARDRAILS_AVAILABLE, validator_vetoed
 from agent.nodes import execute, gate, impact, investigate, monitor, plan
 from agent.nodes.plan import MAX_CORRECTION_ROUNDS
 from contracts.constants import TOOL_BUDGET_PER_DISRUPTION
@@ -50,17 +52,44 @@ MAX_REPLANS = 3        # §4.5 — an agent that replans forever looks worse
 # impossible to violate rather than checked afterwards, so they should never
 # appear in a post-solve verdict at all.
 #
-# G8 (quote expired) is neither: it needs a fresh RFQ, which is node 3's work,
-# not another solve. Escalating is the safe reading until node 4 lands at hour
-# 10.5 and can route it back to investigation.
+# G8 (quote expired) is a THIRD kind, and neither of the other two fits. A
+# stale quote is not fixed by solving again — the solver would re-use the same
+# expired number — and it is not a reason to wake a human either. It is fixed
+# by asking for a fresh quote, which is investigation. So it routes back to
+# node 3, capped by the same replan_count as an assumption break so a supplier
+# who keeps issuing short-lived quotes cannot spin the graph.
+#
+# Track A's guardrails/validator.py ships its own vetoed(), and theirs treats
+# G8 as re-solvable. Ours is the routing decision rather than the rule
+# semantics, so the G8 check runs first and their function decides the rest.
 RESOLVABLE = frozenset({"G1", "G5", "G11"})
-ESCALATE_ONLY = frozenset({"G2", "G8", "G10", "G12"})
+ESCALATE_ONLY = frozenset({"G2", "G10", "G12"})
+NEEDS_FRESH_QUOTES = frozenset({"G8"})
+
+
+def needs_fresh_quotes(verdict: dict) -> bool:
+    """G8: the plan rests on a quote that has expired. Re-RFQ, do not re-solve."""
+    return bool(set(verdict.get("fired") or []) & NEEDS_FRESH_QUOTES)
 
 
 def vetoed(verdict: dict) -> bool:
-    """True only when re-solving could actually change the answer."""
+    """True only when re-solving could actually change the answer.
+
+    Track A's validator is the authority on its own rules, so use their
+    vetoed() when it is importable and fall back to the table above before the
+    merge. Either way G8 is handled by the caller, not here.
+    """
     if verdict.get("passed", True):
         return False
+    if GUARDRAILS_AVAILABLE and validator_vetoed is not None:
+        from contracts.models import Verdict
+        return bool(validator_vetoed(Verdict(**{
+            "passed": verdict.get("passed", False),
+            "fired": [f for f in (verdict.get("fired") or [])
+                      if f not in NEEDS_FRESH_QUOTES],
+            "reasons": verdict.get("reasons") or [],
+            "forced_escalation": verdict.get("forced_escalation", False),
+        })))
     if verdict.get("forced_escalation"):
         return False
     return bool(set(verdict.get("fired") or []) & RESOLVABLE)
@@ -76,14 +105,24 @@ def route_after_investigate(state: AgentState) -> str:
 
 
 def route_after_plan(state: AgentState) -> str:
-    """(b) The validator vetoes, the planner re-solves. The LLM does not get to
-    overrule the validator; after MAX_CORRECTION_ROUNDS it escalates.
+    """(b) Three outcomes, not two.
 
-    Branches on vetoed(), not on passed: a G2 or G12 firing fails the plan for
-    execution but re-solving under it is futile, so it goes straight to the
-    gate with both correction rounds still unspent."""
+    G8    -> investigate   the plan rests on an expired quote. A re-solve would
+                           re-use the same stale number; only a fresh RFQ fixes
+                           it, and RFQs are node 3's work. Capped by
+                           replan_count so it cannot loop.
+    veto  -> plan          G1, G5 or G11: solve again under the reason.
+    else  -> gate          passed, or failed in a way re-solving cannot fix
+                           (G2, G12), with both correction rounds unspent.
+    """
     verdicts = state.get("guardrail_verdicts") or []
     latest = verdicts[-1] if verdicts else {}
+
+    if needs_fresh_quotes(latest):
+        if int(state.get("replan_count", 0)) < MAX_REPLANS:
+            return "investigate"
+        return "gate"                       # out of re-RFQ attempts -> escalate
+
     if not vetoed(latest):
         return "gate"                       # passed, or failed unresolvably
     rounds = int((state.get("plan") or {}).get("correction_rounds", 0))
@@ -132,7 +171,8 @@ def build_graph(checkpointer=None):
     g.add_conditional_edges("investigate", route_after_investigate,
                             {"plan": "plan", "gate": "gate"})
     g.add_conditional_edges("plan", route_after_plan,
-                            {"plan": "plan", "gate": "gate"})
+                            {"plan": "plan", "gate": "gate",
+                             "investigate": "investigate"})
     g.add_conditional_edges("gate", route_after_gate,
                             {"execute": "execute", "plan": "plan", "end": END})
     g.add_conditional_edges("execute", route_after_execute,

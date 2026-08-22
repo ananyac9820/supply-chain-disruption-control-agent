@@ -59,12 +59,19 @@ class ReplyClassification(BaseModel):
     rationale: str
 
 
+class PlanRationale(BaseModel):
+    rationale: str = Field(description="why this plan, in an ops manager's language")
+    why_not_alternatives: str = Field(
+        description="why the rejected suppliers were not used")
+
+
 class LLMClient(Protocol):
     name: str
 
     def triage(self, context: dict) -> DisruptionTriage: ...
     def select_tool(self, context: dict) -> ToolChoice: ...
     def classify_reply(self, body: str, context: dict) -> ReplyClassification: ...
+    def explain_plan(self, context: dict) -> PlanRationale: ...
 
 
 # ---- prompts -----------------------------------------------------------
@@ -101,6 +108,16 @@ SELECT_SYSTEM = DOMAIN + (
     "reply must not advance the plan - send exactly one targeted follow-up "
     "naming the PO and demanding a date and a quantity, then pursue alternate "
     "sourcing in parallel rather than waiting."
+)
+
+EXPLAIN_SYSTEM = DOMAIN + (
+    "\n\nThe solver has already decided. Write the reasoning an operations "
+    "manager would want: why this plan beats the alternatives that were "
+    "filtered out, in plain language. Every number you are given is final - "
+    "quote them, never recompute them, never round them differently. If a "
+    "verification_delta is present, say plainly that checking the supplier's "
+    "claim is what changed the cost and, when it crossed the approval "
+    "threshold, that the check is why a human is being asked at all."
 )
 
 CLASSIFY_SYSTEM = DOMAIN + (
@@ -141,6 +158,9 @@ class AnthropicLLM:
     def classify_reply(self, body: str, context: dict) -> ReplyClassification:
         prompt = f"Supplier reply:\n\n{body}\n\nContext:\n{_render(context)}"
         return self._parse(CLASSIFY_SYSTEM, prompt, ReplyClassification)
+
+    def explain_plan(self, context: dict) -> PlanRationale:
+        return self._parse(EXPLAIN_SYSTEM, _render(context), PlanRationale)
 
 
 def _render(context: dict) -> str:
@@ -227,6 +247,89 @@ class RuleBasedLLM:
         return ToolChoice(tool="done",
                           necessity="the delay is verified and quotes cover the "
                                     "shortfall; planning can proceed")
+
+    def explain_plan(self, context: dict) -> PlanRationale:
+        """Formats the decided numbers. Computes none of them."""
+        allocs = context.get("allocations") or []
+        resched = context.get("reschedules") or []
+        base = context.get("baseline") or {}
+        delta = context.get("verification_delta")
+        status = context.get("status")
+
+        if status == "INFEASIBLE":
+            body = (f"No plan satisfies every constraint. The binding one is "
+                    f"{context.get('binding_constraint')}.")
+        else:
+            split = " + ".join(f"{a['units']} units from {a['supplier_id']} "
+                               f"arriving day {a['arrival_day']}" for a in allocs)
+            body = f"Cover the shortfall with {split}." if split else "No purchase is needed."
+            if resched:
+                body += (" " + "; ".join(
+                    f"{r['production_order_id']} moves out {r['delay_days']} days"
+                    for r in resched)
+                    + ", which is what makes the earlier deadlines reachable.")
+            if base.get("cost_of_inaction"):
+                body += (f" It costs {context.get('total_cost', 0):,.0f} against a "
+                         f"{base['cost_of_inaction']:,.0f} cost of doing nothing.")
+
+        if delta and delta.get("delta"):
+            excluded = ", ".join(delta.get("suppliers_excluded") or [])
+            body += (f" Checking {excluded}'s dispatch claim against tracking "
+                     f"removed it from the candidate set, which moved the cost from "
+                     f"{delta['cost_if_unverified']:,.0f} to "
+                     f"{delta['cost_as_planned']:,.0f} - a difference of "
+                     f"{delta['delta']:,.0f}.")
+            if delta.get("crossed_threshold"):
+                body += (" That difference is what carried the plan over the "
+                         "approval threshold, so the verification is the reason "
+                         "this decision is in front of a human at all.")
+
+        rejected = context.get("rejected_alternatives") or []
+        why_not = ("; ".join(r["label"] for r in rejected)
+                   if rejected else "no supplier was filtered out")
+        return PlanRationale(rationale=body, why_not_alternatives=why_not)
+
+    def explain_plan(self, context: dict) -> PlanRationale:
+        """Formats numbers that were already decided. Computes none of them."""
+        allocs = context.get("allocations") or []
+        resched = context.get("reschedules") or []
+        base = context.get("baseline") or {}
+        delta = context.get("verification_delta")
+
+        if context.get("status") == "INFEASIBLE":
+            body = (f"No plan satisfies every constraint. The binding one is "
+                    f"{context.get('binding_constraint')}.")
+        else:
+            split = " + ".join(f"{a['units']} units from {a['supplier_id']} "
+                               f"arriving day {a['arrival_day']}" for a in allocs)
+            body = (f"Cover the shortfall with {split}." if split
+                    else "No purchase is needed.")
+            if resched:
+                body += (" " + "; ".join(
+                    f"{r['production_order_id']} moves out {r['delay_days']} days"
+                    for r in resched)
+                    + ", which is what makes the earlier deadlines reachable.")
+            if base.get("cost_of_inaction"):
+                body += (f" It costs {context.get('total_cost', 0):,.0f} against a "
+                         f"{base['cost_of_inaction']:,.0f} cost of doing nothing.")
+
+        if delta and delta.get("delta"):
+            excluded = ", ".join(delta.get("suppliers_excluded") or [])
+            body += (f" Checking {excluded}'s dispatch claim against tracking "
+                     f"removed it from the candidate set, which moved the cost "
+                     f"from {delta['cost_if_unverified']:,.0f} to "
+                     f"{delta['cost_as_planned']:,.0f} - a difference of "
+                     f"{delta['delta']:,.0f}.")
+            if delta.get("crossed_threshold"):
+                body += (" That difference is what carried the plan over the "
+                         "approval threshold, so the verification is the reason "
+                         "this decision is in front of a human at all.")
+
+        rejected = context.get("rejected_alternatives") or []
+        return PlanRationale(
+            rationale=body,
+            why_not_alternatives=("; ".join(r["label"] for r in rejected)
+                                  if rejected else "no supplier was filtered out"))
 
     def classify_reply(self, body: str, context: dict) -> ReplyClassification:
         low = body.lower()

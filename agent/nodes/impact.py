@@ -58,6 +58,10 @@ def impact(state: AgentState) -> dict:
     # deriving it again is how the two ends up disagreeing.
     base["earliest_at_risk_day"] = min(
         (r["deadline_day"] for r in rows if r["shortfall"] > 0), default=0)
+    # G5 asks which priorities a safety-stock breach would touch. Node 2 owns
+    # every read of the production schedule, so the map travels from here
+    # rather than node 4 reading the schedule again to answer the same question.
+    base["priorities"] = {r["production_order_id"]: r["priority"] for r in rows}
 
     out: dict = {
         "usable_stock": component.usable_stock,

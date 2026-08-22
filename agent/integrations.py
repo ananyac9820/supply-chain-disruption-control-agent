@@ -26,9 +26,11 @@ except ImportError:                     # pragma: no cover - pre-merge path
 
 try:                                    # Track A: guardrails/validator.py
     from guardrails.validator import validate
+    from guardrails.validator import vetoed as validator_vetoed
     GUARDRAILS_AVAILABLE = True
 except ImportError:                     # pragma: no cover - pre-merge path
     validate = None                     # type: ignore[assignment]
+    validator_vetoed = None             # type: ignore[assignment]
     GUARDRAILS_AVAILABLE = False
 
 try:                                    # Track A: trust.py at the repo root
