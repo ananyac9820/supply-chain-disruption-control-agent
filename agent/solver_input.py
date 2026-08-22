@@ -294,6 +294,19 @@ def build_solver_input(
             certified=is_certified,
             quality_score=sup.quality_score,
             quote_expired=expired,
+            # NAME vs MEANING. This field is frozen in contracts/models.py and
+            # its name no longer describes what it carries. It does NOT mean
+            # "this supplier made a false claim". It means "the units from this
+            # supplier cannot be confirmed", and it is fed from the shipment
+            # confidence axis - the same value guardrails' G9 keys on, so the
+            # pre-solve filter and the post-check cannot disagree.
+            #
+            # A discrepancy between a claim and tracking drops shipment
+            # confidence whoever turns out to be responsible; only an incident
+            # the evidence attributes to SUPPLIER moves reputation, and
+            # reputation reaches the solver through effective_reliability
+            # above, not through this flag. On the COMP-104 scenario this is
+            # True for SUP-21 while its reputation is untouched at 0.72.
             claim_contradicted=is_contradicted,
         ))
 
