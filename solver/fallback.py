@@ -139,16 +139,23 @@ def _by_id(candidates: list[SolverSupplier], supplier_id: str) -> SolverSupplier
 
 
 def _eligible(inp: SolverInput, relax: _Relax) -> list[SolverSupplier]:
-    """G3, G8 and G9 as pre-solve filters (§4.4).
+    """G3, G4, G8 and G9 as pre-solve filters (§4.4).
 
     A supplier removed here is never shown downstream as "cheaper, with risk
-    noted" — it is simply not a candidate. G4's quality floor is applied by
-    the caller when it builds SolverInput, since min_quality lives on the
-    Component and never reaches the solver.
+    noted" — it is simply not a candidate.
+
+    §4.4 makes G4 the caller's job, and the caller should still drop
+    sub-threshold suppliers when it builds SolverInput. The floor is applied
+    again here so a forgotten line in build_solver_input cannot let an
+    under-quality supplier into a plan. The quality floor rides with the
+    certification relaxation in _diagnose: both are eligibility rules, and
+    the binding-constraint vocabulary of §4.2 has no separate name for
+    quality.
     """
     return sorted(
         (s for s in inp.suppliers
          if (relax.certification or s.certified)
+         and (relax.certification or s.quality_score >= inp.min_quality)
          and not s.quote_expired
          and not s.claim_contradicted),
         key=lambda s: (s.unit_price, s.lead_time_days, s.supplier_id),
